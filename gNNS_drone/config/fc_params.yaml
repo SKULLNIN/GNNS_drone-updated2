@@ -1,0 +1,193 @@
+# ============================================================
+# gNNS Drone — ArduPilot Flight Controller Parameters
+# ============================================================
+# Apply these to CubeOrange via Mission Planner / QGroundControl
+# Grouped by function with explanations.
+# ============================================================
+
+# ============================================================
+# SERIAL PORTS
+# ============================================================
+serial:
+  # TELEM2 → Jetson Nano companion computer
+  SERIAL2_PROTOCOL: 2           # MAVLink2
+  SERIAL2_BAUD: 921             # 921600 baud
+
+# ============================================================
+# GPS — DISABLED
+# ============================================================
+# We explicitly disable GPS since this is a GPS-denied system.
+# The EKF will use external vision (VIO) instead.
+gps:
+  GPS1_TYPE: 0                  # No GPS connected
+  GPS2_TYPE: 0                  # No GPS connected
+
+# ============================================================
+# EKF3 — EXTERNAL NAVIGATION (VIO)
+# ============================================================
+# This is the MOST CRITICAL section. These parameters tell
+# ArduPilot's EKF3 to use VISION_POSITION_ESTIMATE messages
+# from the Jetson Nano as its primary position source.
+#
+# DEBUG TIPS:
+# - If EKF won't converge: check VISO_TYPE and EK3_SRC1_* params
+# - If drone drifts: check VIO frame alignment (VISO_ORIENT)
+# - If arm fails with "EKF not healthy": wait for convergence (10-30s)
+# - Watch EKF_STATUS_REPORT in Mission Planner for variance values
+ekf:
+  # Enable EKF3, disable EKF2
+  EK3_ENABLE: 1
+  EK2_ENABLE: 0
+  AHRS_EKF_TYPE: 3             # Use EKF3
+
+  # Source Set 1 — External Navigation (from Jetson VIO)
+  # Value 6 = ExternalNav for all position/velocity sources
+  EK3_SRC1_POSXY: 6            # Horizontal position from ExternalNav
+  EK3_SRC1_VELXY: 6            # Horizontal velocity from ExternalNav
+  EK3_SRC1_POSZ: 6             # Vertical position from ExternalNav
+                                # ⚠️ Change to 1 (Baro) if VIO altitude is noisy
+  EK3_SRC1_VELZ: 6             # Vertical velocity from ExternalNav
+  EK3_SRC1_YAW: 6              # Yaw from ExternalNav
+                                # ⚠️ Change to 1 (Compass) if VIO yaw drifts
+
+  # Source Set 2 — Fallback (Barometer + Compass only)
+  # Used if Source 1 fails. Provides basic stabilization for landing.
+  EK3_SRC2_POSXY: 0            # None (no GPS fallback)
+  EK3_SRC2_VELXY: 0            # None
+  EK3_SRC2_POSZ: 1             # Barometer
+  EK3_SRC2_VELZ: 0             # None
+  EK3_SRC2_YAW: 1              # Compass
+
+  # EKF tuning for vision-based navigation
+  EK3_POS_I_GATE: 500          # Position innovation gate (wider = more tolerant)
+  EK3_VEL_I_GATE: 500          # Velocity innovation gate
+  EK3_HGT_I_GATE: 500          # Height innovation gate
+
+  # GPS noise parameters (set high since we're not using GPS)
+  EK3_GPS_TYPE: 0              # Disable GPS fusion in EKF
+  
+  # External nav noise parameters — tune these based on your VIO quality
+  # Lower values = EKF trusts VIO more
+  # Higher values = EKF trusts IMU more (more filtering)
+  # START with higher values (0.5-1.0) and decrease as VIO proves reliable
+  EK3_EXTNAV_NOISE: 0.3        # External nav position noise (meters)
+  EK3_EXTNAV_DELAY: 20         # External nav delay (ms) — measure this!
+                                # T265 ≈ 10-20ms, D435i ≈ 30-50ms
+
+# ============================================================
+# VISION POSITION INPUT
+# ============================================================
+# Tells ArduPilot how to interpret VISION_POSITION_ESTIMATE messages
+viso:
+  VISO_TYPE: 1                  # 1 = MAVLink (receives position via MAVLink)
+  VISO_ORIENT: 0                # 0 = default orientation (NED)
+                                # ⚠️ CRITICAL: Must match your camera mounting!
+                                # 0=None, 4=Yaw90, 6=Yaw180, 2=Yaw270
+                                # If camera faces right: VISO_ORIENT=4
+                                # If camera faces back:  VISO_ORIENT=6
+                                # If camera faces left:  VISO_ORIENT=2
+  
+  # Camera position offset from center of gravity (meters)
+  # Measure carefully! The EKF compensates for this offset.
+  VISO_POS_X: 0.0              # Forward from CG (positive = forward)
+  VISO_POS_Y: 0.0              # Right from CG (positive = right)
+  VISO_POS_Z: 0.0              # Down from CG (positive = down)
+  
+  VISO_DELAY_MS: 20            # Processing delay of VIO system (milliseconds)
+                                # Measure: timestamp_sent - timestamp_image_captured
+
+# ============================================================
+# FRAME & MOTORS
+# ============================================================
+frame:
+  FRAME_CLASS: 1                # 1 = Quad
+  FRAME_TYPE: 1                 # 1 = X configuration
+                                # 0 = + configuration
+                                # Verify motor order matches your wiring!
+
+# ============================================================
+# ARMING
+# ============================================================
+# Must skip GPS arming check since we don't have GPS
+arming:
+  ARMING_CHECK: -17             # Skip GPS check (bit 4)
+                                # Alternative: set to 1 and individually disable:
+                                #   ARMING_CHECK = 1
+                                #   Then param set ARMING_CHECK <value_without_GPS_bit>
+  
+  # Pre-arm requirements
+  BRD_SAFETYENABLE: 0          # Disable safety switch (CubeOrange has one)
+                                # ⚠️ Only disable for development! Re-enable for flights.
+
+# ============================================================
+# FLIGHT MODES
+# ============================================================
+# GUIDED mode is required for MAVLink-commanded navigation
+# Always have LAND or STABILIZE on a switch for safety!
+modes:
+  FLTMODE1: 4                   # GUIDED (for autonomous navigation)
+  FLTMODE2: 0                   # STABILIZE (safety — manual control)
+  FLTMODE3: 5                   # LOITER (hold position — uses VIO)
+  FLTMODE4: 6                   # RTL (return to launch)
+  FLTMODE5: 9                   # LAND (emergency landing)
+  FLTMODE6: 2                   # ALT_HOLD (altitude hold with manual control)
+
+# ============================================================
+# ALTITUDE CONTROL
+# ============================================================
+altitude:
+  # If using a downward rangefinder (TF-Luna, TFMini):
+  RNGFND1_TYPE: 0               # 0 = None. Set to sensor type if installed.
+                                 # 20 = Benewake TFMini
+                                 # 25 = Benewake TF-Luna
+  RNGFND1_MAX_CM: 600           # Maximum range in cm
+  RNGFND1_MIN_CM: 10            # Minimum range in cm
+
+# ============================================================
+# SPEED & NAVIGATION LIMITS
+# ============================================================
+speed:
+  WPNAV_SPEED: 300              # Horizontal speed in cm/s (3 m/s)
+                                 # ⚠️ Start SLOW! VIO can lose tracking at high speed
+  WPNAV_SPEED_UP: 150           # Climb speed cm/s (1.5 m/s)
+  WPNAV_SPEED_DN: 100           # Descent speed cm/s (1 m/s)
+  WPNAV_ACCEL: 100              # Horizontal acceleration cm/s/s
+  WPNAV_RADIUS: 100             # Waypoint acceptance radius cm (1 m)
+  LOIT_SPEED: 250               # Loiter max speed cm/s
+  
+  # Position controller tuning
+  PSC_POSXY_P: 1.0              # Position P gain (reduce if oscillating)
+  PSC_VELXY_P: 2.0              # Velocity P gain
+
+# ============================================================
+# VIBRATION MONITORING
+# ============================================================
+# Vibration kills VIO accuracy — monitor these closely!
+# In Mission Planner: check VIBE message
+# Good: < 15 m/s/s
+# Marginal: 15-30 m/s/s  
+# Bad: > 30 m/s/s (will cause VIO issues)
+vibration:
+  INS_ACCEL_FILTER: 20          # Accelerometer low-pass filter (Hz)
+  INS_GYRO_FILTER: 20           # Gyro low-pass filter (Hz)
+
+# ============================================================
+# OBSTACLE AVOIDANCE (if using OBSTACLE_DISTANCE)
+# ============================================================
+avoidance:
+  PRX_TYPE: 2                   # 2 = MAVLink (receives OBSTACLE_DISTANCE from Jetson)
+  OA_TYPE: 1                    # 1 = BendyRuler path planner
+  OA_MARGIN_MAX: 3              # Maximum braking margin (meters)
+  AVOID_ENABLE: 7               # Enable all avoidance: fences + proximity + ground
+  AVOID_MARGIN: 2               # Minimum distance to maintain from obstacles (meters)
+
+# ============================================================
+# BATTERY FAILSAFE
+# ============================================================
+battery:
+  BATT_MONITOR: 4               # Analog voltage + current sensor
+  BATT_CAPACITY: 5000           # Battery capacity in mAh (adjust to your battery)
+  BATT_LOW_VOLT: 14.4           # Low voltage threshold (4S: 3.6V × 4)
+  BATT_CRT_VOLT: 14.0           # Critical voltage (4S: 3.5V × 4)
+  BATT_FS_LOW_ACT: 2            # Low battery: RTL
+  BATT_FS_CRT_ACT: 1            # Critical battery: LAND immediately

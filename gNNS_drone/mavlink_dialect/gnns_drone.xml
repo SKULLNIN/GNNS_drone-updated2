@@ -1,0 +1,300 @@
+<?xml version="1.0"?>
+<!--
+  gNNS Drone Custom MAVLink Dialect
+  
+  GPS-deNied Navigation System — Custom messages for smooth
+  communication between Jetson Nano companion computer and
+  CubeOrange flight controller.
+  
+  These messages extend the common dialect with:
+  - VIO health and status reporting
+  - Navigation state telemetry  
+  - Sensor fusion confidence metrics
+  - Debug/diagnostic channels
+  
+  To generate C headers:
+    python3 -m pymavlink.tools.mavgen \
+      - -lang=C \
+      - -wire-protocol=2.0 \
+      - -output=generated/include/mavlink/v2.0 \
+      gNNS_drone/mavlink_dialect/gnns_drone.xml
+  
+  To generate Python bindings:
+    python3 -m pymavlink.tools.mavgen \
+      - -lang=Python3 \
+      - -wire-protocol=2.0 \
+      - -output=generated/python \
+      gNNS_drone/mavlink_dialect/gnns_drone.xml
+-->
+<mavlink>
+  <!-- Inherit ALL standard + common messages -->
+  <include>../../message_definitions/v1.0/common.xml</include>
+  
+  <version>1</version>
+  <dialect>200</dialect>
+  
+  <enums>
+    <!-- ============================================================ -->
+    <!-- VIO TRACKER STATUS                                           -->
+    <!-- ============================================================ -->
+    <enum name="GNNS_VIO_STATUS">
+      <description>Status of the Visual Inertial Odometry tracker.</description>
+      <entry value="0" name="GNNS_VIO_STATUS_UNINITIALIZED">
+        <description>VIO not yet initialized, no position data available.</description>
+      </entry>
+      <entry value="1" name="GNNS_VIO_STATUS_INITIALIZING">
+        <description>VIO is initializing — accumulating features, not yet reliable.</description>
+      </entry>
+      <entry value="2" name="GNNS_VIO_STATUS_TRACKING">
+        <description>VIO is actively tracking with good confidence.</description>
+      </entry>
+      <entry value="3" name="GNNS_VIO_STATUS_DEGRADED">
+        <description>VIO tracking quality degraded (low features, fast motion, bad lighting).</description>
+      </entry>
+      <entry value="4" name="GNNS_VIO_STATUS_LOST">
+        <description>VIO tracking lost — position estimate is unreliable. LAND IMMEDIATELY.</description>
+      </entry>
+      <entry value="5" name="GNNS_VIO_STATUS_RELOCALIZING">
+        <description>VIO is attempting to relocalize after tracking loss.</description>
+      </entry>
+    </enum>
+
+    <!-- ============================================================ -->
+    <!-- NAVIGATION STATE                                             -->
+    <!-- ============================================================ -->
+    <enum name="GNNS_NAV_STATE">
+      <description>Current state of the navigation controller.</description>
+      <entry value="0" name="GNNS_NAV_IDLE">
+        <description>Navigation controller idle, not executing mission.</description>
+      </entry>
+      <entry value="1" name="GNNS_NAV_PREFLIGHT">
+        <description>Running preflight checks (sensor validation, EKF convergence).</description>
+      </entry>
+      <entry value="2" name="GNNS_NAV_TAKEOFF">
+        <description>Taking off to mission altitude.</description>
+      </entry>
+      <entry value="3" name="GNNS_NAV_TRANSIT">
+        <description>In transit to next waypoint.</description>
+      </entry>
+      <entry value="4" name="GNNS_NAV_APPROACHING">
+        <description>Approaching waypoint — within final approach radius.</description>
+      </entry>
+      <entry value="5" name="GNNS_NAV_LANDING">
+        <description>Landing at waypoint.</description>
+      </entry>
+      <entry value="6" name="GNNS_NAV_ON_GROUND">
+        <description>On ground at waypoint, waiting.</description>
+      </entry>
+      <entry value="7" name="GNNS_NAV_RTH">
+        <description>Returning to home/start position.</description>
+      </entry>
+      <entry value="8" name="GNNS_NAV_EMERGENCY">
+        <description>Emergency state — executing failsafe.</description>
+      </entry>
+      <entry value="9" name="GNNS_NAV_COMPLETE">
+        <description>Mission complete, all waypoints visited + returned home.</description>
+      </entry>
+    </enum>
+
+    <!-- ============================================================ -->
+    <!-- SENSOR HEALTH FLAGS                                          -->
+    <!-- ============================================================ -->
+    <enum name="GNNS_SENSOR_FLAGS" bitmask="true">
+      <description>Bitmask for sensor health status in gNNS system.</description>
+      <entry value="1" name="GNNS_SENSOR_VIO_OK">
+        <description>VIO camera is connected and producing frames.</description>
+      </entry>
+      <entry value="2" name="GNNS_SENSOR_DEPTH_OK">
+        <description>Depth camera is connected and producing depth maps.</description>
+      </entry>
+      <entry value="4" name="GNNS_SENSOR_LIDAR_OK">
+        <description>LiDAR scanner is connected and producing scans.</description>
+      </entry>
+      <entry value="8" name="GNNS_SENSOR_IMU_OK">
+        <description>External IMU (if any) is healthy.</description>
+      </entry>
+      <entry value="16" name="GNNS_SENSOR_RANGEFINDER_OK">
+        <description>Downward-facing rangefinder is producing altitude readings.</description>
+      </entry>
+      <entry value="32" name="GNNS_SENSOR_FC_LINK_OK">
+        <description>MAVLink connection to flight controller is healthy.</description>
+      </entry>
+      <entry value="64" name="GNNS_SENSOR_EKF_OK">
+        <description>EKF on flight controller has converged and is healthy.</description>
+      </entry>
+    </enum>
+
+    <!-- ============================================================ -->
+    <!-- DIAGNOSTIC SEVERITY                                          -->
+    <!-- ============================================================ -->
+    <enum name="GNNS_DIAG_LEVEL">
+      <description>Diagnostic message severity levels.</description>
+      <entry value="0" name="GNNS_DIAG_TRACE">
+        <description>Trace-level verbose debugging info.</description>
+      </entry>
+      <entry value="1" name="GNNS_DIAG_DEBUG">
+        <description>Debug-level info useful during development.</description>
+      </entry>
+      <entry value="2" name="GNNS_DIAG_INFO">
+        <description>Normal operational info.</description>
+      </entry>
+      <entry value="3" name="GNNS_DIAG_WARN">
+        <description>Warning — something needs attention but not critical.</description>
+      </entry>
+      <entry value="4" name="GNNS_DIAG_ERROR">
+        <description>Error — operation failed or sensor issue.</description>
+      </entry>
+      <entry value="5" name="GNNS_DIAG_CRITICAL">
+        <description>Critical — triggering failsafe or emergency landing.</description>
+      </entry>
+    </enum>
+  </enums>
+
+  <messages>
+    <!-- ============================================================ -->
+    <!-- MSG 50001: VIO STATUS — sent from Jetson → FC at 10 Hz      -->
+    <!-- Reports VIO tracker health and confidence                    -->
+    <!-- ============================================================ -->
+    <message id="50001" name="GNNS_VIO_STATUS_MSG">
+      <description>
+        VIO tracker status and health report. Sent from companion computer 
+        to flight controller at 10 Hz. The FC uses this to determine whether
+        the external position data is trustworthy.
+      </description>
+      <field type="uint64_t" name="timestamp_us">Timestamp in microseconds since system boot.</field>
+      <field type="uint8_t" name="tracker_status" enum="GNNS_VIO_STATUS">Current VIO tracker status.</field>
+      <field type="uint8_t" name="tracking_confidence">Tracking confidence 0-100 percent. Below 50 triggers degraded state.</field>
+      <field type="uint16_t" name="feature_count">Number of visual features currently being tracked.</field>
+      <field type="float" name="position_x">Current VIO position X (North) in meters from start.</field>
+      <field type="float" name="position_y">Current VIO position Y (East) in meters from start.</field>
+      <field type="float" name="position_z">Current VIO position Z (Down) in meters from start.</field>
+      <field type="float" name="velocity_x">Current velocity X (North) in m/s.</field>
+      <field type="float" name="velocity_y">Current velocity Y (East) in m/s.</field>
+      <field type="float" name="velocity_z">Current velocity Z (Down) in m/s.</field>
+      <field type="float" name="roll">Roll angle in radians.</field>
+      <field type="float" name="pitch">Pitch angle in radians.</field>
+      <field type="float" name="yaw">Yaw angle in radians.</field>
+      <field type="float" name="position_covariance">Position uncertainty estimate in meters (1-sigma).</field>
+      <field type="float" name="angular_covariance">Angular uncertainty estimate in radians (1-sigma).</field>
+      <field type="uint32_t" name="frame_count">Total frames processed since VIO start (for debugging drops).</field>
+      <field type="float" name="fps">Current VIO processing rate in frames per second.</field>
+    </message>
+
+    <!-- ============================================================ -->
+    <!-- MSG 50002: NAVIGATION STATUS — sent from Jetson → FC/GCS    -->
+    <!-- Reports current navigation controller state                  -->
+    <!-- ============================================================ -->
+    <message id="50002" name="GNNS_NAV_STATUS_MSG">
+      <description>
+        Navigation controller status. Sent from companion computer to FC 
+        and/or GCS at 2 Hz. Provides mission progress and navigation state.
+      </description>
+      <field type="uint64_t" name="timestamp_us">Timestamp in microseconds since system boot.</field>
+      <field type="uint8_t" name="nav_state" enum="GNNS_NAV_STATE">Current navigation state.</field>
+      <field type="uint8_t" name="current_waypoint">Current target waypoint index (1-5, 0=home).</field>
+      <field type="uint8_t" name="total_waypoints">Total number of waypoints in mission.</field>
+      <field type="uint8_t" name="waypoints_completed">Number of waypoints successfully visited.</field>
+      <field type="float" name="target_north">Target waypoint North position (meters from start).</field>
+      <field type="float" name="target_east">Target waypoint East position (meters from start).</field>
+      <field type="float" name="target_alt">Target altitude in meters (positive up).</field>
+      <field type="float" name="distance_to_target">Horizontal distance to current target in meters.</field>
+      <field type="float" name="bearing_to_target">Bearing to current target in degrees (0=North, 90=East).</field>
+      <field type="float" name="ground_speed">Current ground speed in m/s.</field>
+      <field type="float" name="eta_seconds">Estimated time of arrival in seconds. -1 if unknown.</field>
+      <field type="float" name="total_distance_traveled">Total distance traveled since mission start (meters).</field>
+      <field type="float" name="home_distance">Distance from home/start position (meters).</field>
+    </message>
+
+    <!-- ============================================================ -->
+    <!-- MSG 50003: SENSOR HEALTH — sent from Jetson → FC/GCS        -->
+    <!-- Bitmask of all sensor statuses for quick health check        -->
+    <!-- ============================================================ -->
+    <message id="50003" name="GNNS_SENSOR_HEALTH_MSG">
+      <description>
+        Overall sensor health status. Sent at 1 Hz. Each field gives 
+        individual sensor health plus a combined bitmask.
+      </description>
+      <field type="uint64_t" name="timestamp_us">Timestamp in microseconds since system boot.</field>
+      <field type="uint8_t" name="sensors_ok" enum="GNNS_SENSOR_FLAGS" display="bitmask">Bitmask of healthy sensors.</field>
+      <field type="uint8_t" name="sensors_present" enum="GNNS_SENSOR_FLAGS" display="bitmask">Bitmask of present/expected sensors.</field>
+      <field type="float" name="vio_fps">VIO camera frames per second. 0 if not working.</field>
+      <field type="float" name="depth_fps">Depth camera frames per second. 0 if not working.</field>
+      <field type="float" name="lidar_rpm">LiDAR rotations per minute. 0 if not working.</field>
+      <field type="uint16_t" name="lidar_points_per_scan">Number of points per LiDAR scan.</field>
+      <field type="float" name="fc_link_quality">FC MAVLink link quality 0-100 percent.</field>
+      <field type="uint32_t" name="fc_messages_received">Total MAVLink messages received from FC.</field>
+      <field type="uint32_t" name="fc_messages_sent">Total MAVLink messages sent to FC.</field>
+      <field type="uint16_t" name="fc_msg_drops">MAVLink message drops detected.</field>
+      <field type="float" name="fc_latency_ms">Round-trip MAVLink latency in milliseconds.</field>
+      <field type="float" name="cpu_usage_percent">Jetson Nano CPU usage percentage.</field>
+      <field type="float" name="memory_usage_percent">Jetson Nano RAM usage percentage.</field>
+      <field type="float" name="cpu_temp_celsius">Jetson Nano CPU temperature in Celsius.</field>
+    </message>
+
+    <!-- ============================================================ -->
+    <!-- MSG 50004: DEBUG TELEMETRY — sent from Jetson → GCS         -->
+    <!-- Flexible debug channel for development                       -->
+    <!-- ============================================================ -->
+    <message id="50004" name="GNNS_DEBUG_MSG">
+      <description>
+        Flexible debug telemetry message. Use during development to monitor
+        any internal variables. The key field identifies what data[0-3] represent.
+      </description>
+      <field type="uint64_t" name="timestamp_us">Timestamp in microseconds since system boot.</field>
+      <field type="uint8_t" name="severity" enum="GNNS_DIAG_LEVEL">Message severity level.</field>
+      <field type="uint16_t" name="key">Debug key identifier. Used to distinguish different debug data streams.</field>
+      <field type="float" name="data0">Debug data value 0 (meaning depends on key).</field>
+      <field type="float" name="data1">Debug data value 1 (meaning depends on key).</field>
+      <field type="float" name="data2">Debug data value 2 (meaning depends on key).</field>
+      <field type="float" name="data3">Debug data value 3 (meaning depends on key).</field>
+      <field type="char[40]" name="text">Optional debug text message.</field>
+    </message>
+
+    <!-- ============================================================ -->
+    <!-- MSG 50005: EKF DIAGNOSTICS — pulled from FC for debugging   -->
+    <!-- Compact view of EKF3 health (supplement to EKF_STATUS_REPORT)-->
+    <!-- ============================================================ -->
+    <message id="50005" name="GNNS_EKF_DIAG_MSG">
+      <description>
+        EKF3 diagnostic summary, aggregated on companion computer from
+        ArduPilot's EKF_STATUS_REPORT and other messages. Useful for
+        verifying that VIO data is being accepted by the EKF.
+      </description>
+      <field type="uint64_t" name="timestamp_us">Timestamp in microseconds since system boot.</field>
+      <field type="uint8_t" name="ekf_healthy">1 if EKF is healthy, 0 otherwise.</field>
+      <field type="float" name="velocity_variance">EKF velocity innovation variance.</field>
+      <field type="float" name="pos_horiz_variance">EKF horizontal position innovation variance.</field>
+      <field type="float" name="pos_vert_variance">EKF vertical position innovation variance.</field>
+      <field type="float" name="compass_variance">EKF compass/yaw innovation variance.</field>
+      <field type="float" name="terrain_alt_variance">EKF terrain altitude innovation variance.</field>
+      <field type="float" name="vio_innovation_x">Innovation (difference) between VIO and EKF position X.</field>
+      <field type="float" name="vio_innovation_y">Innovation (difference) between VIO and EKF position Y.</field>
+      <field type="float" name="vio_innovation_z">Innovation (difference) between VIO and EKF position Z.</field>
+      <field type="uint8_t" name="vio_fusing">1 if EKF is actively fusing VIO data, 0 if rejecting.</field>
+      <field type="uint32_t" name="vio_msgs_accepted">Total VIO messages accepted by EKF.</field>
+      <field type="uint32_t" name="vio_msgs_rejected">Total VIO messages rejected by EKF.</field>
+    </message>
+
+    <!-- ============================================================ -->
+    <!-- MSG 50006: WAYPOINT RESULT — sent after landing at waypoint  -->
+    <!-- ============================================================ -->
+    <message id="50006" name="GNNS_WAYPOINT_RESULT_MSG">
+      <description>
+        Waypoint visit result. Sent after landing at each waypoint.
+        Records accuracy metrics for post-flight analysis.
+      </description>
+      <field type="uint64_t" name="timestamp_us">Timestamp in microseconds since system boot.</field>
+      <field type="uint8_t" name="waypoint_index">Waypoint index (1-5).</field>
+      <field type="float" name="target_lat">Target GPS latitude (as entered by user).</field>
+      <field type="float" name="target_lon">Target GPS longitude (as entered by user).</field>
+      <field type="float" name="actual_north">Actual landing position North (meters from start).</field>
+      <field type="float" name="actual_east">Actual landing position East (meters from start).</field>
+      <field type="float" name="position_error">Horizontal position error at landing (meters).</field>
+      <field type="float" name="transit_time">Time taken to reach this waypoint (seconds).</field>
+      <field type="float" name="transit_distance">Distance traveled to reach this waypoint (meters).</field>
+      <field type="float" name="avg_speed">Average ground speed during transit (m/s).</field>
+      <field type="uint8_t" name="vio_status_at_landing" enum="GNNS_VIO_STATUS">VIO tracker status when landed.</field>
+      <field type="uint8_t" name="tracking_confidence_at_landing">VIO confidence when landed (0-100).</field>
+    </message>
+  </messages>
+</mavlink>

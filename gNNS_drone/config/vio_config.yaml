@@ -1,0 +1,111 @@
+# ============================================================
+# gNNS Drone — VIO & Sensor Configuration
+# ============================================================
+
+vio:
+  # Camera type: "t265" or "d435i"
+  camera_type: "t265"
+  
+  # RealSense T265 settings
+  t265:
+    enable_pose_stream: true
+    enable_fisheye_stream: false   # Disable to save bandwidth
+    
+  # RealSense D435i settings (if using D435i for VIO instead of T265)
+  d435i:
+    depth_width: 640
+    depth_height: 480
+    depth_fps: 30
+    color_width: 640
+    color_height: 480
+    color_fps: 30
+    enable_imu: true               # D435i has built-in IMU
+    
+  # Coordinate frame transformation
+  # Camera frame → NED frame mapping
+  # T265: x_right, y_down, z_backward → NED: x_north, y_east, z_down
+  # Depends on how camera is mounted on the drone
+  transform:
+    # If camera faces FORWARD (default):
+    x_axis: "-z"    # Camera's -Z (backward) = NED's +X (forward/north)
+    y_axis: "x"     # Camera's +X (right) = NED's +Y (east)
+    z_axis: "y"     # Camera's +Y (down) = NED's +Z (down)
+    
+  # Tracking quality thresholds
+  thresholds:
+    min_confidence: 30            # Below this → DEGRADED status
+    critical_confidence: 10       # Below this → LOST status, trigger failsafe
+    min_features: 50              # Minimum visual features for reliable tracking
+    max_velocity: 5.0             # m/s — above this VIO may lose tracking
+    max_angular_rate: 2.0         # rad/s — above this VIO may blur
+    
+  # Position update rate to FC
+  output_rate_hz: 30              # Must match mavlink_config send_rates
+  
+  # Filtering
+  position_filter:
+    enable: true
+    type: "low_pass"              # "low_pass" or "kalman"
+    cutoff_hz: 15                 # Low-pass cutoff frequency
+    
+  # Health monitoring
+  health:
+    watchdog_timeout_s: 0.5       # If no VIO frame for 0.5s → sensor error
+    fps_warning_threshold: 15     # Warn if FPS drops below this
+    covariance_warning: 0.5       # Warn if position covariance exceeds (meters)
+
+# ============================================================
+# LIDAR
+# ============================================================
+lidar:
+  enabled: true
+  type: "rplidar_a2"             # "rplidar_a1", "rplidar_a2", "rplidar_a3"
+  port: "/dev/ttyUSB0"
+  baudrate: 115200
+  
+  # Scan parameters
+  scan_mode: "Sensitivity"       # RPLiDAR A2 modes: "Standard", "Express", "Sensitivity"
+  max_range_m: 12.0              # Maximum detection range
+  min_range_m: 0.15              # Minimum detection range
+  
+  # OBSTACLE_DISTANCE message config
+  obstacle_distance:
+    angular_increment_deg: 5     # Send every 5 degrees (72 sectors)
+    send_rate_hz: 10             # How often to send to FC
+    min_distance_cm: 15
+    max_distance_cm: 1200        # 12 meters
+    
+  # Health monitoring  
+  health:
+    watchdog_timeout_s: 2.0
+    min_rpm: 200                  # Warn if motor RPM drops below this
+    min_points_per_scan: 100      # Warn if too few points
+
+# ============================================================
+# DEPTH CAMERA (for obstacle avoidance, not VIO)
+# ============================================================
+depth_camera:
+  enabled: true
+  # Used for: forward obstacle avoidance, precision landing
+  # If using D435i for VIO too, it shares the same camera
+  
+  depth_range:
+    min_m: 0.3
+    max_m: 10.0
+    
+  # Precision landing (downward depth for landing surface detection)
+  landing:
+    enable_surface_detection: true
+    safe_landing_slope_deg: 15    # Max slope angle for safe landing
+    min_clearance_m: 0.3          # Minimum clearance from obstacles on ground
+
+# ============================================================
+# RANGEFINDER (optional, downward-facing for altitude)
+# ============================================================
+rangefinder:
+  enabled: false
+  type: "tf_luna"                # "tfmini", "tf_luna", "vl53l1x"
+  port: "/dev/ttyUSB1"
+  baudrate: 115200
+  max_range_m: 6.0
+  min_range_m: 0.1

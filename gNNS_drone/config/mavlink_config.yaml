@@ -1,0 +1,84 @@
+# ============================================================
+# gNNS Drone — MAVLink Connection Configuration
+# ============================================================
+# All MAVLink communication parameters between Jetson Nano
+# and CubeOrange flight controller.
+# ============================================================
+
+connection:
+  # Serial port on Jetson Nano connected to CubeOrange TELEM2
+  # Options:
+  #   /dev/ttyTHS1  — Jetson Nano hardware UART (GPIO pins 8 & 10)
+  #   /dev/ttyUSB0  — USB-to-Serial adapter
+  #   tcp:127.0.0.1:5762 — SITL simulation (for testing)
+  #   udp:127.0.0.1:14550 — UDP connection
+  port: "/dev/ttyTHS1"
+  baudrate: 921600
+
+  # System & Component IDs
+  # FC is typically system=1, component=1
+  # Companion computer should be system=1, component=191 (MAV_COMP_ID_ONBOARD_COMPUTER)
+  source_system: 1
+  source_component: 191
+  target_system: 1
+  target_component: 1
+
+  # Connection health
+  heartbeat_interval_s: 1.0     # Send heartbeat every 1 second
+  heartbeat_timeout_s: 5.0      # If no FC heartbeat for 5s → connection lost
+  reconnect_attempts: 5         # Number of reconnect attempts before failsafe
+  reconnect_delay_s: 2.0        # Delay between reconnect attempts
+
+# ============================================================
+# Message send rates (Hz)
+# Higher rates = smoother control but more CPU/bandwidth
+# ============================================================
+send_rates:
+  vision_position_estimate: 30  # CRITICAL: VIO position → FC (30 Hz minimum)
+  obstacle_distance: 10         # LiDAR obstacle data → FC
+  gnns_vio_status: 10           # Custom VIO health report
+  gnns_nav_status: 2            # Navigation state update
+  gnns_sensor_health: 1         # Overall sensor health
+  gnns_debug: 5                 # Debug telemetry (reduce in production)
+
+# ============================================================
+# Message request rates from FC (Hz)
+# These tell the FC how often to send us data
+# ============================================================
+request_rates:
+  HEARTBEAT: 1
+  SYS_STATUS: 2
+  LOCAL_POSITION_NED: 30        # Position feedback from EKF
+  ATTITUDE: 30                  # Attitude for VIO frame alignment
+  ATTITUDE_QUATERNION: 0        # Disable (redundant with ATTITUDE)
+  EKF_STATUS_REPORT: 2          # EKF health for debugging
+  VIBRATION: 1                  # Vibration levels (affects VIO quality)
+  BATTERY_STATUS: 0.2           # Battery (every 5 seconds is enough)
+  RC_CHANNELS: 0                # Disable (not needed on companion)
+  SERVO_OUTPUT_RAW: 0           # Disable
+  GPS_RAW_INT: 0                # Disable (no GPS!)
+  GLOBAL_POSITION_INT: 0        # Disable (no GPS!)
+  VFR_HUD: 1                    # Useful telemetry (speed, altitude, climb)
+  HOME_POSITION: 0.1            # Home position (rarely changes)
+  STATUSTEXT: 0                 # Always sent on event, no polling needed
+
+# ============================================================
+# MAVLink debugging options
+# ============================================================
+debug:
+  log_all_incoming: false       # Log every incoming message (VERY verbose)
+  log_all_outgoing: false       # Log every outgoing message (VERY verbose)
+  log_unknown_messages: true    # Log messages we don't handle
+  log_command_acks: true        # Log all COMMAND_ACK responses
+  log_mode_changes: true        # Log flight mode transitions
+  log_arm_disarm: true          # Log arm/disarm events
+  log_ekf_status: true          # Log EKF health changes
+  log_vio_drops: true           # Log when VIO messages are rejected by EKF
+  
+  # Message timing diagnostics
+  measure_latency: true         # Measure round-trip latency periodically
+  latency_interval_s: 10.0      # How often to measure latency
+  
+  # Log file
+  log_file: "logs/mavlink_{timestamp}.log"
+  log_level: "DEBUG"            # TRACE, DEBUG, INFO, WARN, ERROR

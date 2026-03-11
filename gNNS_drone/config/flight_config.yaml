@@ -1,0 +1,127 @@
+# ============================================================
+# gNNS Drone — Flight Controller Gains & Parameters
+# ============================================================
+# TUNED FROM autonomy_core SO3 controller gains:
+#   pos: {x: 4.0, y: 4.0, z: 4.0}
+#   vel: {x: 3.5, y: 3.5, z: 3.5}
+#   stopping_policy: acc_xy=6.0, jerk_xy=3.0
+#   trajectory_planner: max_v=3.0, max_a=4.0, max_j=2.0
+#
+# Our PID maps position_error → velocity, so gains are scaled
+# differently from SO3 (which maps to thrust+attitude).
+#
+# KEY RULE: ArduPilot's inner loop does the actual attitude/thrust
+# control. Our outer loop ONLY outputs velocity commands.
+# So we want SMOOTH velocity profiles, not aggressive ones.
+# ============================================================
+
+# ============================================================
+# Position → Velocity PID Gains
+# ============================================================
+position_gains:
+  # Horizontal (North-East plane)
+  # autonomy_core: pos_kp=4.0, vel_kp=3.5
+  # Our mapping: kp=0.6 gives ~3m/s at 5m error (good)
+  horizontal:
+    kp: 0.60       # Smooth proportional (autonomy_core style)
+    ki: 0.01       # Tiny integral for steady-state
+    kd: 0.25       # Moderate damping (anti-overshoot)
+    max_integral: 0.5
+
+  # Vertical (altitude hold)
+  vertical:
+    kp: 0.7
+    ki: 0.02
+    kd: 0.3
+    max_integral: 0.3
+
+# ============================================================
+# Velocity Limits (m/s)
+# autonomy_core: max_v=3.0, max_v_z=1.5
+# We boost horizontal for competition
+# ============================================================
+velocity_limits:
+  cruise_max: 4.0        # Competition speed (~14km/h)
+  approach_max: 2.5      # Approach speed
+  landing_horizontal: 0.3
+  landing_final: 0.15
+  ascent_max: 1.0        # Fast climb
+  descent_max: 1.0       # Fast descent
+  descent_landing: 0.2
+  descent_final: 0.1
+
+# ============================================================
+# Acceleration Limits (m/s²)
+# autonomy_core stopping_policy: acc_xy=6.0, jerk_xy=3.0
+# We use 2.5 for smooth velocity ramps
+# ============================================================
+acceleration_limits:
+  horizontal: 2.5        # Smooth ramp (no jerk)
+  vertical: 2.0
+  landing: 0.5
+
+# ============================================================
+# Waypoint Navigation
+# autonomy_core: tol_pos=3.0, final_goal_reach=7.0
+# ============================================================
+waypoint:
+  cruise_altitude: 2.5
+  arrival_radius: 2.0
+  slowdown_radius: 8.0
+  heading_mode: "auto"
+
+# ============================================================
+# Takeoff Parameters
+# ============================================================
+takeoff:
+  target_altitude: 2.5
+  vertical_speed: 0.8
+  stabilize_time: 3.0
+  ramp_up_time: 2.0
+  arm_delay: 1.0
+
+# ============================================================
+# Landing Parameters
+# ============================================================
+landing:
+  approach_altitude: 3.0
+  align_start_altitude: 3.0
+  final_start_altitude: 1.0
+  touchdown_altitude: 0.15
+
+  approach_speed: 0.6
+  align_descent_rate: 0.2
+  final_descent_rate: 0.1
+
+  align_center_tolerance: 0.5
+  final_center_tolerance: 0.3
+
+  # Landing PID — tighter, more damped
+  align_gains:
+    kp: 0.5
+    ki: 0.0
+    kd: 0.3
+  final_gains:
+    kp: 0.3
+    ki: 0.0
+    kd: 0.4
+
+  search_timeout: 30.0
+  search_spiral_rate: 0.5
+  search_max_radius: 3.0
+
+  target_lost_align_timeout: 10.0
+  target_lost_final_timeout: 5.0
+
+  max_landing_time: 60.0
+  max_tilt_deg: 15.0
+
+# ============================================================
+# Safety & Geofence
+# ============================================================
+safety:
+  geofence_radius: 100.0       # Competition: large radius
+  min_battery_pct: 20.0
+  max_altitude: 10.0
+  min_odom_confidence: 30
+  vio_lost_action: "LAND"

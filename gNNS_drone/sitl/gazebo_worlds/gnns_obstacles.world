@@ -1,0 +1,219 @@
+<?xml version="1.0" ?>
+<sdf version="1.6">
+  <world name="gnns_drone_world">
+
+    <!-- ============================================ -->
+    <!-- PHYSICS -->
+    <!-- ============================================ -->
+    <physics name="default_physics" default="0" type="ode">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1</real_time_factor>
+      <real_time_update_rate>1000</real_time_update_rate>
+    </physics>
+
+    <!-- ============================================ -->
+    <!-- SCENE (sky + lighting) -->
+    <!-- ============================================ -->
+    <scene>
+      <ambient>0.6 0.6 0.6 1</ambient>
+      <background>0.4 0.6 0.9 1</background>
+      <shadows>true</shadows>
+    </scene>
+
+    <include>
+      <uri>model://sun</uri>
+    </include>
+
+    <!-- ============================================ -->
+    <!-- GROUND PLANE (flat landing area) -->
+    <!-- ============================================ -->
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <plane><normal>0 0 1</normal><size>100 100</size></plane>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <plane><normal>0 0 1</normal><size>100 100</size></plane>
+          </geometry>
+          <material>
+            <script>
+              <uri>file://media/materials/scripts/gazebo.material</uri>
+              <name>Gazebo/Grey</name>
+            </script>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ============================================ -->
+    <!-- OBSTACLE 1: Tall cylinder (tree trunk) -->
+    <!-- Position: 8m North, 3m East -->
+    <!-- ============================================ -->
+    <model name="tree_1">
+      <static>true</static>
+      <pose>8 3 1 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><cylinder><radius>0.3</radius><length>2</length></cylinder></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><cylinder><radius>0.3</radius><length>2</length></cylinder></geometry>
+          <material><ambient>0.2 0.5 0.1 1</ambient><diffuse>0.3 0.6 0.2 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ============================================ -->
+    <!-- OBSTACLE 2: Another tree -->
+    <!-- Position: -5m North, 7m East -->
+    <!-- ============================================ -->
+    <model name="tree_2">
+      <static>true</static>
+      <pose>-5 7 1.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><cylinder><radius>0.4</radius><length>3</length></cylinder></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><cylinder><radius>0.4</radius><length>3</length></cylinder></geometry>
+          <material><ambient>0.2 0.5 0.1 1</ambient><diffuse>0.3 0.6 0.2 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ============================================ -->
+    <!-- OBSTACLE 3: Box (building/wall) -->
+    <!-- Position: 5m North, -6m East -->
+    <!-- ============================================ -->
+    <model name="building_1">
+      <static>true</static>
+      <pose>5 -6 1 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>3 2 2</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>3 2 2</size></box></geometry>
+          <material><ambient>0.6 0.4 0.3 1</ambient><diffuse>0.7 0.5 0.4 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ============================================ -->
+    <!-- OBSTACLE 4: Small wall -->
+    <!-- Position: -8m North, -4m East -->
+    <!-- ============================================ -->
+    <model name="wall_1">
+      <static>true</static>
+      <pose>-8 -4 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>4 0.3 1</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>4 0.3 1</size></box></geometry>
+          <material><ambient>0.5 0.5 0.5 1</ambient><diffuse>0.6 0.6 0.6 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ============================================ -->
+    <!-- OBSTACLE 5: Rock cluster -->
+    <!-- Position: 3m North, 10m East -->
+    <!-- ============================================ -->
+    <model name="rock_1">
+      <static>true</static>
+      <pose>3 10 0.3 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><sphere><radius>0.6</radius></sphere></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><sphere><radius>0.6</radius></sphere></geometry>
+          <material><ambient>0.4 0.35 0.3 1</ambient><diffuse>0.5 0.45 0.4 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="rock_2">
+      <static>true</static>
+      <pose>4 10.5 0.25 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><sphere><radius>0.5</radius></sphere></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><sphere><radius>0.5</radius></sphere></geometry>
+          <material><ambient>0.4 0.35 0.3 1</ambient><diffuse>0.5 0.45 0.4 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ============================================ -->
+    <!-- OBSTACLE 6: Tall pole -->
+    <!-- Position: -3m North, -10m East -->
+    <!-- ============================================ -->
+    <model name="pole_1">
+      <static>true</static>
+      <pose>-3 -10 2 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><cylinder><radius>0.1</radius><length>4</length></cylinder></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><cylinder><radius>0.1</radius><length>4</length></cylinder></geometry>
+          <material><ambient>0.3 0.3 0.3 1</ambient><diffuse>0.4 0.4 0.4 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ============================================ -->
+    <!-- ROUGH TERRAIN: Raised bumpy area -->
+    <!-- Position: -6m North, 3m East -->
+    <!-- ============================================ -->
+    <model name="rough_terrain_1">
+      <static>true</static>
+      <pose>-6 3 0.1 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>3 3 0.2</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>3 3 0.2</size></box></geometry>
+          <material><ambient>0.5 0.4 0.2 1</ambient><diffuse>0.6 0.5 0.3 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ============================================ -->
+    <!-- LANDING PAD (safe zone marker) -->
+    <!-- Position: 10m North, 10m East -->
+    <!-- ============================================ -->
+    <model name="landing_pad">
+      <static>true</static>
+      <pose>10 10 0.01 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><cylinder><radius>1.5</radius><length>0.02</length></cylinder></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><cylinder><radius>1.5</radius><length>0.02</length></cylinder></geometry>
+          <material><ambient>0.8 0.2 0.1 1</ambient><diffuse>0.9 0.3 0.1 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ============================================ -->
+    <!-- DRONE (Iris ArduPilot) -->
+    <!-- ============================================ -->
+    <include>
+      <uri>model://iris_with_ardupilot</uri>
+      <pose>0 0 0.05 0 0 0</pose>
+    </include>
+
+  </world>
+</sdf>

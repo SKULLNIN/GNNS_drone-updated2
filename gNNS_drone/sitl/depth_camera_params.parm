@@ -1,0 +1,18 @@
+# ArduPilot parameters for depth camera obstacle avoidance
+# Load with: sim_vehicle.py --add-param-file=sitl/depth_camera_params.parm
+
+# Rangefinder (downward) — reads ground distance
+RNGFND1_TYPE 1
+RNGFND1_PIN 0
+RNGFND1_SCALING 10
+
+# Proximity sensor — DISABLED by default (enable only with depth camera Gazebo world)
+# PRX1_TYPE 2
+# PRX_LOG_RAW 1
+
+# Object avoidance — DISABLED by default
+# AVOID_ENABLE 7
+# AVOID_MARGIN 2
+
+# EKF — trust rangefinder for altitude
+EK2_RNG_USE_HGT 70
