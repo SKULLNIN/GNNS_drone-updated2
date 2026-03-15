@@ -19,6 +19,7 @@ import logging
 import yaml
 from pathlib import Path
 from enum import IntEnum
+from typing import Optional, Any
 from pymavlink import mavutil
 
 logger = logging.getLogger("gnns.mavlink")
@@ -91,17 +92,17 @@ class MAVLinkBridge:
         bridge.land()
     """
 
-    def __init__(self, config_path: str = None):
+    def __init__(self, config_path: Optional[str] = None):
         """
         Initialize MAVLink bridge.
-        
+
         Args:
             config_path: Path to mavlink_config.yaml. If None, uses defaults.
         """
         # Load configuration
         self.config = self._load_config(config_path)
-        
-        self.conn = None
+
+        self.conn: Any = None
         self.stats = LinkStats()
         self._running = False
         self._recv_thread = None
@@ -127,7 +128,7 @@ class MAVLinkBridge:
         # Logging already set in main() or parent script
         pass
 
-    def _load_config(self, config_path: str = None) -> dict:
+    def _load_config(self, config_path: Optional[str] = None) -> dict:
         """Load MAVLink configuration from YAML file."""
         if config_path is None:
             # Try default location
@@ -141,7 +142,7 @@ class MAVLinkBridge:
         with open(config_path, 'r') as f:
             config = yaml.safe_load(f)
             logger.info(f"Loaded config from {config_path}")
-            return config
+            return config if config is not None else self._default_config()
 
     def _default_config(self) -> dict:
         return {
@@ -164,6 +165,12 @@ class MAVLinkBridge:
             },
             "debug": {"log_level": "DEBUG"},
         }
+
+    def _conn(self) -> Any:
+        """Return the MAVLink connection; raise if not connected (for type checker)."""
+        if self.conn is None:
+            raise RuntimeError("MAVLink not connected")
+        return self.conn
 
     # ==============================================================
     # CONNECTION MANAGEMENT
@@ -193,13 +200,13 @@ class MAVLinkBridge:
     def wait_for_heartbeat(self, timeout: float = 30.0) -> bool:
         """Wait for heartbeat from FC. Returns True if received."""
         logger.info(f"Waiting for FC heartbeat (timeout={timeout}s)...")
-        hb = self.conn.wait_heartbeat(timeout=timeout)
+        hb = self._conn().wait_heartbeat(timeout=timeout)
         if hb:
             self.stats.connected = True
             self.stats.last_heartbeat_time = time.time()
             logger.info(
-                f"Heartbeat received! System={self.conn.target_system}, "
-                f"Component={self.conn.target_component}, "
+                f"Heartbeat received! System={self._conn().target_system}, "
+                f"Component={self._conn().target_component}, "
                 f"Type={hb.type}, Autopilot={hb.autopilot}"
             )
             # Start receive thread + heartbeat thread
@@ -218,7 +225,7 @@ class MAVLinkBridge:
         if self._heartbeat_thread:
             self._heartbeat_thread.join(timeout=2.0)
         if self.conn:
-            self.conn.close()
+            self._conn().close()
         logger.info("Disconnected from FC")
 
     def _start_heartbeat_thread(self):
@@ -263,7 +270,7 @@ class MAVLinkBridge:
 
         while self._running:
             try:
-                msg = self.conn.recv_match(blocking=True, timeout=1.0)
+                msg = self._conn().recv_match(blocking=True, timeout=1.0)
                 if msg is None:
                     continue
 
@@ -381,9 +388,9 @@ class MAVLinkBridge:
                 msg_id = msg_id_map[msg_name]
                 interval_us = int(1e6 / rate_hz) if rate_hz > 0 else 0
 
-                self.conn.mav.command_long_send(
-                    self.conn.target_system,
-                    self.conn.target_component,
+                self._conn().mav.command_long_send(
+                    self._conn().target_system,
+                    self._conn().target_component,
                     mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL,
                     0,
                     msg_id,
@@ -402,7 +409,7 @@ class MAVLinkBridge:
 
     def send_vision_position(self, x: float, y: float, z: float,
                               roll: float = 0, pitch: float = 0, yaw: float = 0,
-                              covariance: list = None):
+                              covariance: Optional[list] = None):
         """
         Send VISION_POSITION_ESTIMATE to FC.
         This is the core message that replaces GPS!
@@ -422,11 +429,11 @@ class MAVLinkBridge:
         usec = int(time.time() * 1e6)
 
         if covariance and len(covariance) == 21:
-            self.conn.mav.vision_position_estimate_send(
+            self._conn().mav.vision_position_estimate_send(
                 usec, x, y, z, roll, pitch, yaw, covariance
             )
         else:
-            self.conn.mav.vision_position_estimate_send(
+            self._conn().mav.vision_position_estimate_send(
                 usec, x, y, z, roll, pitch, yaw
             )
         self.stats.messages_sent += 1
@@ -437,7 +444,7 @@ class MAVLinkBridge:
             logger.warning("NaN/Inf in vision speed! Skipping send.")
             return
         usec = int(time.time() * 1e6)
-        self.conn.mav.vision_speed_estimate_send(usec, vx, vy, vz)
+        self._conn().mav.vision_speed_estimate_send(usec, vx, vy, vz)
         self.stats.messages_sent += 1
 
     # ==============================================================
@@ -450,7 +457,7 @@ class MAVLinkBridge:
             try:
                 mode_id = FCMode[mode_name.upper()].value
             except KeyError:
-                mode_mapping = self.conn.mode_mapping()
+                mode_mapping = self._conn().mode_mapping()
                 mode_id = mode_mapping.get(mode_name)
                 if mode_id is None:
                     logger.error(f"Unknown mode: {mode_name}")
@@ -459,8 +466,8 @@ class MAVLinkBridge:
             mode_id = int(mode_name)
 
         logger.info(f"Setting mode: {mode_name} (id={mode_id})")
-        self.conn.mav.command_long_send(
-            self.conn.target_system, self.conn.target_component,
+        self._conn().mav.command_long_send(
+            self._conn().target_system, self._conn().target_component,
             mavutil.mavlink.MAV_CMD_DO_SET_MODE, 0,
             mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
             mode_id, 0, 0, 0, 0, 0
@@ -479,8 +486,8 @@ class MAVLinkBridge:
         """
         for attempt in range(retries):
             logger.info(f"Arming (attempt {attempt+1}/{retries})...")
-            self.conn.mav.command_long_send(
-                self.conn.target_system, self.conn.target_component,
+            self._conn().mav.command_long_send(
+                self._conn().target_system, self._conn().target_component,
                 mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM, 0,
                 1, 0, 0, 0, 0, 0, 0
             )
@@ -516,8 +523,8 @@ class MAVLinkBridge:
     def disarm(self, force: bool = False, timeout: float = 3.0) -> bool:
         """Disarm motors."""
         logger.info(f"Disarming (force={force})...")
-        self.conn.mav.command_long_send(
-            self.conn.target_system, self.conn.target_component,
+        self._conn().mav.command_long_send(
+            self._conn().target_system, self._conn().target_component,
             mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM, 0,
             0, 21196 if force else 0, 0, 0, 0, 0, 0
         )
@@ -530,8 +537,8 @@ class MAVLinkBridge:
         Must be in GUIDED mode and armed first.
         """
         logger.info(f"Takeoff to {altitude}m...")
-        self.conn.mav.command_long_send(
-            self.conn.target_system, self.conn.target_component,
+        self._conn().mav.command_long_send(
+            self._conn().target_system, self._conn().target_component,
             mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 0,
             0, 0, 0, 0, 0, 0, altitude
         )
@@ -576,9 +583,9 @@ class MAVLinkBridge:
         if not math.isnan(yaw):
             type_mask = 0b0000_1011_1111_1000  # Also use yaw
 
-        self.conn.mav.set_position_target_local_ned_send(
+        self._conn().mav.set_position_target_local_ned_send(
             0,  # time_boot_ms
-            self.conn.target_system, self.conn.target_component,
+            self._conn().target_system, self._conn().target_component,
             mavutil.mavlink.MAV_FRAME_LOCAL_NED,
             type_mask,
             north, east, down,
@@ -652,7 +659,7 @@ class MAVLinkBridge:
             increment_deg: Angular increment between sectors
             angle_offset: Starting angle offset in degrees
         """
-        self.conn.mav.obstacle_distance_send(
+        self._conn().mav.obstacle_distance_send(
             int(time.time() * 1e6),
             mavutil.mavlink.MAV_DISTANCE_SENSOR_LASER,
             distances_cm,
@@ -675,8 +682,8 @@ class MAVLinkBridge:
         self._pending_param_name = param_name
         self._pending_param_value = None
 
-        self.conn.mav.param_request_read_send(
-            self.conn.target_system, self.conn.target_component,
+        self._conn().mav.param_request_read_send(
+            self._conn().target_system, self._conn().target_component,
             param_name.encode('utf-8'), -1
         )
         # Wait for recv thread to deliver the PARAM_VALUE
@@ -697,8 +704,8 @@ class MAVLinkBridge:
         self._pending_param_name = param_name
         self._pending_param_value = None
 
-        self.conn.mav.param_set_send(
-            self.conn.target_system, self.conn.target_component,
+        self._conn().mav.param_set_send(
+            self._conn().target_system, self._conn().target_component,
             param_name.encode('utf-8'),
             value,
             mavutil.mavlink.MAV_PARAM_TYPE_REAL32
@@ -754,7 +761,7 @@ class MAVLinkBridge:
 
     def send_heartbeat(self):
         """Send companion computer heartbeat to FC."""
-        self.conn.mav.heartbeat_send(
+        self._conn().mav.heartbeat_send(
             mavutil.mavlink.MAV_TYPE_ONBOARD_CONTROLLER,
             mavutil.mavlink.MAV_AUTOPILOT_INVALID,
             0, 0, 0
@@ -780,10 +787,10 @@ class MAVLinkBridge:
         # 0b0000_0111_1100_0111 = use velocity + yaw_rate only
         type_mask = 0b0000_0111_1100_0111
 
-        self.conn.mav.set_position_target_local_ned_send(
+        self._conn().mav.set_position_target_local_ned_send(
             0,
-            self.conn.target_system,
-            self.conn.target_component,
+            self._conn().target_system,
+            self._conn().target_component,
             mavutil.mavlink.MAV_FRAME_LOCAL_NED,
             type_mask,
             0, 0, 0,           # position (ignored)
@@ -817,10 +824,10 @@ class MAVLinkBridge:
         # 0b0000_0101_1100_0111 = velocity + yaw heading
         type_mask = 0b0000_0101_1100_0111
 
-        self.conn.mav.set_position_target_local_ned_send(
+        self._conn().mav.set_position_target_local_ned_send(
             0,
-            self.conn.target_system,
-            self.conn.target_component,
+            self._conn().target_system,
+            self._conn().target_component,
             mavutil.mavlink.MAV_FRAME_LOCAL_NED,
             type_mask,
             0, 0, 0,           # position (ignored)
@@ -836,8 +843,8 @@ class MAVLinkBridge:
         Needed for SITL (real FC uses configure_message_rates instead).
         """
         logger.info(f"Requesting all streams at {rate_hz} Hz")
-        self.conn.mav.request_data_stream_send(
-            self.conn.target_system, self.conn.target_component,
+        self._conn().mav.request_data_stream_send(
+            self._conn().target_system, self._conn().target_component,
             mavutil.mavlink.MAV_DATA_STREAM_ALL, rate_hz, 1
         )
         self.stats.messages_sent += 1

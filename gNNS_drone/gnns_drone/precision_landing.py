@@ -31,6 +31,7 @@ import math
 import logging
 from enum import IntEnum
 from dataclasses import dataclass
+from typing import Optional
 from .mavlink_bridge import MAVLinkBridge
 from .rtabmap_odom import RTABMapOdom, OdomData
 from .target_detector import TargetDetector, TargetDetection
@@ -95,7 +96,7 @@ class PrecisionLander:
 
     def __init__(self, bridge: MAVLinkBridge, odom: RTABMapOdom,
                  detector: TargetDetector, config: LandingConfig = None,
-                 flight_config: FlightConfig = None):
+                 flight_config: Optional[FlightConfig] = None):
         self.bridge = bridge
         self.odom = odom
         self.detector = detector
@@ -116,7 +117,7 @@ class PrecisionLander:
         logger.warning("Landing abort requested!")
 
     def execute(self, target_north: float, target_east: float,
-                target_altitude: float = None) -> bool:
+                target_altitude: Optional[float] = None) -> bool:
         """
         Execute precision landing sequence.
         

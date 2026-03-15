@@ -1,0 +1,9 @@
+{
+  "include": ["gnns_drone"],
+  "exclude": ["**/__pycache__", "venv", ".venv", "sitl", "tests"],
+  "pythonVersion": "3.9",
+  "typeCheckingMode": "basic",
+  "reportOptionalMemberAccess": false,
+  "reportOptionalSubscript": false,
+  "reportOptionalCall": false
+}

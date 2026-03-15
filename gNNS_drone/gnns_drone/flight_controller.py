@@ -97,7 +97,7 @@ class FlightConfig:
     min_odom_confidence: int = 30
 
     @staticmethod
-    def from_yaml(path: str = None) -> 'FlightConfig':
+    def from_yaml(path: Optional[str] = None) -> 'FlightConfig':
         """Load config from YAML file."""
         if path is None:
             path = str(Path(__file__).parent.parent / "config" / "flight_config.yaml")
@@ -109,7 +109,7 @@ class FlightConfig:
             return cfg
 
         with open(path) as f:
-            data = yaml.safe_load(f)
+            data = yaml.safe_load(f) or {}
 
         # Position gains
         pg = data.get("position_gains", {})
@@ -209,7 +209,7 @@ class PIDController:
         self._prev_time = 0.0
         self._initialized = False
 
-    def update(self, error: float, dt: float = None) -> float:
+    def update(self, error: float, dt: Optional[float] = None) -> float:
         """
         Compute PID output.
         
@@ -275,7 +275,7 @@ class VelocitySmoother:
         self._current_vel = 0.0
         self._prev_time = 0.0
 
-    def update(self, target_vel: float, dt: float = None) -> float:
+    def update(self, target_vel: float, dt: Optional[float] = None) -> float:
         """
         Smooth velocity toward target, limited by max acceleration.
         
@@ -372,7 +372,7 @@ class FlightController:
         bridge.send_velocity_ned(vx, vy, vz)
     """
 
-    def __init__(self, config: FlightConfig = None):
+    def __init__(self, config: Optional[FlightConfig] = None):
         self.config = config or FlightConfig.from_yaml()
 
         # PID controllers — one per axis
@@ -419,7 +419,7 @@ class FlightController:
                                    target_alt: float,
                                    current_n: float, current_e: float,
                                    current_alt: float,
-                                   dt: float = None) -> tuple:
+                                   dt: Optional[float] = None) -> tuple:
         """
         Compute velocity command to fly toward a waypoint.
         
@@ -557,7 +557,7 @@ class FlightController:
         return (vx, vy, vz)
 
     def compute_altitude_hold(self, target_alt: float, current_alt: float,
-                               dt: float = None) -> float:
+                               dt: Optional[float] = None) -> float:
         """Compute vz to hold a target altitude. Returns NED vz."""
         err = target_alt - current_alt
         if math.isnan(err):

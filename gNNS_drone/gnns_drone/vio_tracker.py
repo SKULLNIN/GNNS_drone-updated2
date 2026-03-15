@@ -17,6 +17,7 @@ import threading
 import logging
 from enum import IntEnum
 from dataclasses import dataclass, field
+from typing import Optional
 
 logger = logging.getLogger("gnns.vio")
 
@@ -86,7 +87,7 @@ class VIOTracker:
         tracker.stop()
     """
 
-    def __init__(self, camera_type: str = "t265", config: dict = None):
+    def __init__(self, camera_type: str = "t265", config: Optional[dict] = None):
         self.camera_type = camera_type.lower()
         self.config = config or {}
         

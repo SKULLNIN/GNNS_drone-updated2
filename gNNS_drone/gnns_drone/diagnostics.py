@@ -15,6 +15,7 @@ Run this FIRST before every flight!
 import time
 import sys
 import logging
+from typing import Optional
 from .mavlink_bridge import MAVLinkBridge
 
 logger = logging.getLogger("gnns.diag")
@@ -51,7 +52,7 @@ class Diagnostics:
             print("Fix issues before flight!")
     """
 
-    def __init__(self, bridge: MAVLinkBridge = None, config_path: str = None):
+    def __init__(self, bridge: Optional[MAVLinkBridge] = None, config_path: Optional[str] = None):
         self.bridge = bridge
         self.results: list[DiagResult] = []
         self.config_path = config_path

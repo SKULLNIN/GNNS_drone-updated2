@@ -24,6 +24,7 @@ import time
 import math
 import threading
 import logging
+from typing import Optional
 from .mavlink_bridge import MAVLinkBridge
 from .rtabmap_odom import RTABMapOdom, OdomData
 from .target_detector import TargetDetector, TargetDetection
@@ -47,7 +48,7 @@ class Navigator:
     """
 
     def __init__(self, bridge: MAVLinkBridge, odom: RTABMapOdom,
-                 detector: TargetDetector, flight_config_path: str = None):
+                 detector: TargetDetector, flight_config_path: Optional[str] = None):
         self.bridge = bridge
         self.odom = odom
         self.detector = detector
@@ -136,7 +137,7 @@ class Navigator:
     # MISSION EXECUTION
     # ==============================================================
 
-    def execute_mission(self, flight_alt: float = None) -> bool:
+    def execute_mission(self, flight_alt: Optional[float] = None) -> bool:
         """
         Execute the full 5-waypoint mission with precision landing.
         
@@ -301,7 +302,7 @@ class Navigator:
     # SMOOTH TAKEOFF
     # ==============================================================
 
-    def _smooth_takeoff(self, altitude: float = None) -> bool:
+    def _smooth_takeoff(self, altitude: Optional[float] = None) -> bool:
         """
         Arm and takeoff with smooth velocity ramp.
         

@@ -24,6 +24,7 @@ import signal
 import logging
 import threading
 from pathlib import Path
+from typing import Optional
 from .mavlink_bridge import MAVLinkBridge
 from .rtabmap_odom import RTABMapOdom, OdomData
 from .flight_controller import FlightController, FlightConfig
@@ -62,7 +63,7 @@ class MissionRunner:
     Same code path. Same PID controller. Same Navigator logic.
     """
 
-    def __init__(self, config_path: str = None, sitl_mode: bool = False):
+    def __init__(self, config_path: Optional[str] = None, sitl_mode: bool = False):
         self.sitl_mode = sitl_mode
 
         # Load MAVLink config — override port for SITL

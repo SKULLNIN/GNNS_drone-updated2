@@ -176,7 +176,7 @@ class RTABMapOdom:
         bridge.send_vision_speed(data.vx, data.vy, data.vz)
     """
 
-    def __init__(self, mode: str = "ros2", config: dict = None):
+    def __init__(self, mode: str = "ros2", config: Optional[dict] = None):
         """
         Args:
             mode: "ros2" — subscribe to RTAB-Map ROS2 node's /odom topic
