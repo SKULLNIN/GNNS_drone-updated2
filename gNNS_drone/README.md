@@ -21,6 +21,7 @@ CubeOrange (Flight Controller)
 
 ## Quick Start
 
+**On a development machine (Windows/Linux):**
 ```bash
 # 1. Install dependencies
 pip install -r requirements.txt
@@ -29,8 +30,17 @@ pip install -r requirements.txt
 python -m gnns_drone.diagnostics
 
 # 3. Run the mission
-python -m gnns_drone.mission_runner
+python -m gnns_drone
 ```
+
+**On Jetson Nano (one-command run):**
+```bash
+# One-time: make executable, then run
+chmod +x scripts/jetson_nano/run_mission.sh
+./scripts/jetson_nano/run_mission.sh          # Full mission (enter GPS)
+./scripts/jetson_nano/run_mission.sh --demo   # Demo waypoints
+```
+See [scripts/jetson_nano/README.md](scripts/jetson_nano/README.md) for setup and options.
 
 ## Project Structure
 
@@ -54,7 +64,8 @@ gNNS_drone/
 ├── ros2_ws/                 # ROS2 workspace (optional)
 │   └── src/gnns_drone_ros/
 ├── tests/                   # Unit & integration tests
-├── scripts/                 # Utility scripts
+├── scripts/
+│   └── jetson_nano/         # Run on Jetson Nano (run_mission.sh, setup, udev)
 ├── requirements.txt
 └── README.md
 ```

@@ -1,0 +1,64 @@
+# Jetson Nano — run gNNS Drone
+
+Run the mission directly on the Jetson Nano with minimal setup.
+
+## Quick run
+
+From the **project root** on the Jetson Nano:
+
+```bash
+# Make scripts executable (once)
+chmod +x scripts/jetson_nano/run_mission.sh
+chmod +x scripts/jetson_nano/setup_jetson_nano.sh
+
+# Run full mission (enter GPS at prompts)
+./scripts/jetson_nano/run_mission.sh
+
+# Demo with built-in waypoints (no GPS input)
+./scripts/jetson_nano/run_mission.sh --demo
+```
+
+You can run from any directory; the script switches to the project root automatically.
+
+## One-time setup on the Nano
+
+1. **Clone/copy the repo** onto the Nano (e.g. `~/gNNS_drone`).
+
+2. **Install dependencies:**
+   ```bash
+   cd ~/gNNS_drone
+   ./scripts/jetson_nano/setup_jetson_nano.sh
+   ```
+   Or manually:
+   ```bash
+   pip3 install -r requirements.txt
+   ```
+
+3. **Serial port (CubeOrange TELEM2):**
+   - Default config uses `/dev/ttyTHS1` (Jetson hardware UART).
+   - To use without root:
+     ```bash
+     sudo cp scripts/jetson_nano/99-gnns-telem.rules /etc/udev/rules.d/
+     sudo udevadm control --reload-rules && sudo udevadm trigger
+     ```
+   - If you use a USB–serial adapter, set `connection.port` in `config/mavlink_config.yaml` (e.g. `/dev/ttyUSB0`).
+
+4. **ROS2 (if using RTAB-Map / RealSense):**  
+   Source your ROS2 workspace before running the mission if odometry comes from ROS2.
+
+## Options
+
+Pass any mission-runner arguments after the script:
+
+| Command | Description |
+|--------|-------------|
+| `./scripts/jetson_nano/run_mission.sh` | Normal mission (enter home + 5 waypoints) |
+| `./scripts/jetson_nano/run_mission.sh --demo` | Demo waypoints (no input) |
+| `./scripts/jetson_nano/run_mission.sh --config /path/to/mavlink_config.yaml` | Custom MAVLink config |
+| `./scripts/jetson_nano/run_mission.sh --interactive` | Takeoff, then enter coordinates live |
+
+SITL is for development on a PC; on the Nano you run against the real FC.
+
+## Project root
+
+The launcher resolves the project root from the script path (`scripts/jetson_nano/` → two levels up). Config paths in the code (e.g. `config/mavlink_config.yaml`) are relative to that root, so no `PYTHONPATH` or install is required when using this script.

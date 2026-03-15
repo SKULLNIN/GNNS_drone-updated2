@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+.env
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# IDE / Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs and runtime
+*.log
+logs/
+*.log.*
+
+# Optional: keep config in repo (do NOT ignore config/)
+# Uncomment below only if you want to keep config local-only:
+# config/*.local.yaml
+# config/mavlink_config.yaml
+
+# SITL / sim (optional)
+# *.db
+# *.bag

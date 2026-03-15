@@ -1,0 +1,6 @@
+# gNNS Drone — allow non-root access to Jetson Nano UART (TELEM2)
+# Install: sudo cp 99-gnns-telem.rules /etc/udev/rules.d/
+#          sudo udevadm control --reload-rules && sudo udevadm trigger
+# Then unplug/replug serial or reboot.
+
+KERNEL=="ttyTHS1", MODE="0666"
