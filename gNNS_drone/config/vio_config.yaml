@@ -2,6 +2,23 @@
 # gNNS Drone — VIO & Sensor Configuration
 # ============================================================
 
+# ============================================================
+# ROS2 Odometry (ORB-SLAM3 / RTAB-Map)
+# ============================================================
+# Used when running with ROS2 Humble/Jazzy. Select odom source
+# and topic names. The gNNS mission subscribes to nav_msgs/Odometry
+# and converts to NED for MAVLink VISION_POSITION_ESTIMATE.
+#
+# odom_source: "ros2" (RTAB-Map) | "orbslam3" (ORB-SLAM3 VIO)
+# odom_topic: ROS2 topic for nav_msgs/Odometry (default /odom)
+# odom_frame_convention: "ros_enu_to_ned" | "identity"
+# rtabmap_info_topic: Optional, for loop-closure diagnostics
+ros2_odom:
+  odom_source: "ros2"           # "ros2" | "orbslam3"
+  odom_topic: "/odom"
+  odom_frame_convention: "ros_enu_to_ned"
+  rtabmap_info_topic: "/rtabmap/info"   # optional, for loop-closure info
+
 vio:
   # Camera type: "t265" or "d435i"
   camera_type: "t265"

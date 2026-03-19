@@ -27,7 +27,7 @@ PROJECT_ROOT = str(Path(__file__).parent.parent)
 sys.path.insert(0, PROJECT_ROOT)
 
 from .mavlink_bridge import MAVLinkBridge
-from .rtabmap_odom import RTABMapOdom, OdomData
+from .rtabmap_odom import create_odom_provider, _load_vio_config
 from .flight_controller import FlightController, FlightConfig
 
 logger = logging.getLogger("gnns.web")
@@ -36,7 +36,7 @@ logger = logging.getLogger("gnns.web")
 class DroneController:
     """Manages the drone connection and flight operations."""
 
-    def __init__(self, sitl_mode=True):
+    def __init__(self, sitl_mode=True, vio_source=None):
         self.sitl_mode = sitl_mode
         self.bridge = MAVLinkBridge()
         if sitl_mode:
@@ -47,10 +47,14 @@ class DroneController:
         self.fc = FlightController(FlightConfig.from_yaml(fc_path))
         self.config = self.fc.config
 
+        vio_cfg = _load_vio_config()
+        source = vio_source or vio_cfg.get("odom_source", "ros2")
         if sitl_mode:
-            self.odom = RTABMapOdom(mode="sitl", config={"bridge": self.bridge})
-        else:
-            self.odom = RTABMapOdom(mode="ros2")
+            source = "sitl"
+        odom_cfg = {k: v for k, v in vio_cfg.items() if k != "odom_source"}
+        self.odom = create_odom_provider(
+            source, config=odom_cfg, bridge=self.bridge
+        )
 
         self.connected = False
         self.flying = False
@@ -710,6 +714,9 @@ def main():
     import argparse
     parser = argparse.ArgumentParser(description="gNNS Drone Web Control")
     parser.add_argument("--sitl", action="store_true", help="SITL mode")
+    parser.add_argument("--vio-source", default=None,
+                        choices=["ros2", "orbslam3", "t265_raw", "simulated"],
+                        help="Odometry source (default from vio_config)")
     parser.add_argument("--port", type=int, default=5000, help="Web server port")
     parser.add_argument("--no-auto-connect", action="store_true",
                         help="Don't auto-connect on startup")
@@ -721,7 +728,7 @@ def main():
         datefmt="%H:%M:%S"
     )
 
-    drone = DroneController(sitl_mode=args.sitl)
+    drone = DroneController(sitl_mode=args.sitl, vio_source=args.vio_source)
 
     # Auto-connect
     if not args.no_auto_connect:

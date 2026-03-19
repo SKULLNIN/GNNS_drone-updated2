@@ -72,12 +72,14 @@ ekf:
   # START with higher values (0.5-1.0) and decrease as VIO proves reliable
   EK3_EXTNAV_NOISE: 0.3        # External nav position noise (meters)
   EK3_EXTNAV_DELAY: 20         # External nav delay (ms) — measure this!
-                                # T265 ≈ 10-20ms, D435i ≈ 30-50ms
+                                # T265 ≈ 10-20ms, ORB-SLAM3 ≈ 30-80ms
+                                # Match VISO_DELAY_MS; see docs/ROS2_VIO_SETUP.md
 
 # ============================================================
 # VISION POSITION INPUT
 # ============================================================
 # Tells ArduPilot how to interpret VISION_POSITION_ESTIMATE messages
+# See docs/ROS2_VIO_SETUP.md "Calibration and EKF Tuning" for ORB-SLAM3
 viso:
   VISO_TYPE: 1                  # 1 = MAVLink (receives position via MAVLink)
   VISO_ORIENT: 0                # 0 = default orientation (NED)

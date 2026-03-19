@@ -42,6 +42,14 @@ chmod +x scripts/jetson_nano/run_mission.sh
 ```
 See [scripts/jetson_nano/README.md](scripts/jetson_nano/README.md) for setup and options.
 
+## ROS2 VIO Stack (RealSense + ORB-SLAM3 + RTAB-Map)
+
+For RealSense with ORB-SLAM3 VIO and RTAB-Map mapping:
+
+1. Set `config/vio_config.yaml` → `ros2_odom.odom_source: "orbslam3"` (or `"ros2"` for RTAB-Map odom)
+2. Follow exact bring-up order in [docs/ROS2_VIO_SETUP.md](docs/ROS2_VIO_SETUP.md): RealSense → IMU/TF → ORB-SLAM3 → RTAB-Map (includes calibration and EKF tuning)
+3. Run: `python -m gnns_drone --vio-source orbslam3`
+
 ## Project Structure
 
 ```

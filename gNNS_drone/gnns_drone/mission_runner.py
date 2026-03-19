@@ -26,7 +26,7 @@ import threading
 from pathlib import Path
 from typing import Optional
 from .mavlink_bridge import MAVLinkBridge
-from .rtabmap_odom import RTABMapOdom, OdomData
+from .rtabmap_odom import RTABMapOdom, OdomData, create_odom_provider, _load_vio_config
 from .flight_controller import FlightController, FlightConfig
 from .coordinate_utils import GPSCoord, NEDCoord, WaypointManager, gps_to_ned
 
@@ -63,7 +63,12 @@ class MissionRunner:
     Same code path. Same PID controller. Same Navigator logic.
     """
 
-    def __init__(self, config_path: Optional[str] = None, sitl_mode: bool = False):
+    def __init__(
+        self,
+        config_path: Optional[str] = None,
+        sitl_mode: bool = False,
+        vio_source: Optional[str] = None,
+    ):
         self.sitl_mode = sitl_mode
 
         # Load MAVLink config — override port for SITL
@@ -80,11 +85,15 @@ class MissionRunner:
         self.fc = FlightController(FlightConfig.from_yaml(fc_config_path))
         self.config = self.fc.config
 
-        # Odometry — SITL reads from MAVLink, real uses RTAB-Map
+        # Odometry — select provider from vio_source or config
+        vio_cfg = _load_vio_config()
+        source = vio_source or vio_cfg.get("odom_source", "ros2")
         if sitl_mode:
-            self.odom = RTABMapOdom(mode="sitl", config={"bridge": self.bridge})
-        else:
-            self.odom = RTABMapOdom(mode="ros2")
+            source = "sitl"
+        odom_cfg = {k: v for k, v in vio_cfg.items() if k != "odom_source"}
+        self.odom = create_odom_provider(
+            source, config=odom_cfg, bridge=self.bridge
+        )
 
         # Waypoint manager
         self.waypoints = WaypointManager()
@@ -663,9 +672,11 @@ def main():
                         help="Use demo waypoints (skip GPS input)")
     parser.add_argument("--interactive", "-i", action="store_true",
                         help="Interactive mode: takeoff, then enter coordinates live")
-    parser.add_argument("--camera", default="ros2",
-                        choices=["ros2", "t265_raw", "simulated"],
-                        help="Odometry source (ignored in --sitl mode)")
+    parser.add_argument("--vio-source", "--camera", dest="vio_source",
+                        default=None,
+                        choices=["ros2", "orbslam3", "t265_raw", "simulated"],
+                        help="Odometry source: ros2=RTAB-Map, orbslam3=ORB-SLAM3, "
+                             "t265_raw, simulated (default from vio_config)")
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -674,7 +685,11 @@ def main():
         datefmt="%H:%M:%S"
     )
 
-    runner = MissionRunner(config_path=args.config, sitl_mode=args.sitl)
+    runner = MissionRunner(
+        config_path=args.config,
+        sitl_mode=args.sitl,
+        vio_source=args.vio_source,
+    )
 
     if args.interactive:
         # Interactive mode: takeoff → hover → user types coordinates

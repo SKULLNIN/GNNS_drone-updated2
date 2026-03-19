@@ -25,9 +25,26 @@ import threading
 import logging
 import numpy as np
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional, Callable, List
 
+import yaml
+
 logger = logging.getLogger("gnns.rtabmap")
+
+
+def _load_vio_config() -> dict:
+    """Load vio_config.yaml and return ros2_odom section (or empty dict)."""
+    cfg_path = Path(__file__).parent.parent / "config" / "vio_config.yaml"
+    if not cfg_path.exists():
+        return {}
+    try:
+        with open(cfg_path, "r") as f:
+            data = yaml.safe_load(f)
+        return data.get("ros2_odom", {}) if data else {}
+    except Exception as e:
+        logger.warning(f"Could not load vio_config: {e}")
+        return {}
 
 
 @dataclass
@@ -525,3 +542,39 @@ class RTABMapOdom:
         print(f"  Confidence: {d.confidence}%  Features: {d.num_features}  Inliers: {d.num_inliers}")
         print(f"  Distance:  {self.total_distance:.2f}m  Home: {d.distance_from_home:.2f}m")
         print(f"  Loop closures: {self.loop_closures}")
+
+
+# ==============================================================
+# ODOM PROVIDER FACTORY
+# ==============================================================
+
+
+def create_odom_provider(
+    source: str,
+    config: Optional[dict] = None,
+    bridge=None,
+) -> "RTABMapOdom":
+    """
+    Create an odometry provider based on source.
+    
+    Args:
+        source: "sitl" | "ros2" | "orbslam3" | "t265_raw" | "simulated"
+        config: Optional dict; for orbslam3/ros2 may include odom_topic, etc.
+        bridge: MAVLink bridge (required for sitl mode)
+    
+    Returns:
+        Odometry provider with get(), start(), stop() interface.
+    """
+    cfg = config or {}
+    if source == "sitl":
+        return RTABMapOdom(mode="sitl", config={"bridge": bridge, **cfg})
+    if source == "orbslam3":
+        from .orbslam3_odom import ORBSLAM3Odom
+        return ORBSLAM3Odom(config=cfg)
+    if source in ("ros2", "rtabmap"):
+        return RTABMapOdom(mode="ros2", config=cfg)
+    if source == "t265_raw":
+        return RTABMapOdom(mode="t265_raw", config=cfg)
+    if source == "simulated":
+        return RTABMapOdom(mode="simulated", config=cfg)
+    raise ValueError(f"Unknown odom source: {source}")

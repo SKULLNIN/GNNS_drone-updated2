@@ -30,7 +30,7 @@ sys.path.insert(0, PROJECT_ROOT)
 
 from gnns_drone.flight_controller import FlightController, FlightConfig
 from gnns_drone.mavlink_bridge import MAVLinkBridge
-from gnns_drone.rtabmap_odom import RTABMapOdom
+from gnns_drone.rtabmap_odom import create_odom_provider, _load_vio_config
 from area_scanner import AreaScanner, SafetyGrid, LiveSensor
 from lidar_avoider import LidarAvoider
 
@@ -40,7 +40,7 @@ logger = logging.getLogger("gnns.scanweb")
 class DroneScanner:
     """Manages the drone + scanner for the web UI."""
 
-    def __init__(self, sitl_mode=True):
+    def __init__(self, sitl_mode=True, vio_source=None):
         self.sitl_mode = sitl_mode
 
         # Bridge
@@ -55,11 +55,15 @@ class DroneScanner:
         self.fc = FlightController(FlightConfig.from_yaml(fc_path))
         self.config = self.fc.config
 
-        # Odometry
+        # Odometry — from vio_source or config
+        vio_cfg = _load_vio_config()
+        source = vio_source or vio_cfg.get("odom_source", "ros2")
         if sitl_mode:
-            self.odom = RTABMapOdom(mode="sitl", config={"bridge": self.bridge})
-        else:
-            self.odom = RTABMapOdom(mode="ros2")
+            source = "sitl"
+        odom_cfg = {k: v for k, v in vio_cfg.items() if k != "odom_source"}
+        self.odom = create_odom_provider(
+            source, config=odom_cfg, bridge=self.bridge
+        )
 
         self.scanner = AreaScanner(self.bridge, self.odom, self.fc, self.config)
 
@@ -814,6 +818,9 @@ def main():
     import argparse
     parser = argparse.ArgumentParser(description="gNNS Autonomous Scanner Web UI")
     parser.add_argument("--sitl", action="store_true")
+    parser.add_argument("--vio-source", default=None,
+                        choices=["ros2", "orbslam3", "t265_raw", "simulated"],
+                        help="Odometry source (default from vio_config)")
     parser.add_argument("--port", type=int, default=5001)
     args = parser.parse_args()
 
@@ -821,7 +828,7 @@ def main():
                         format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
                         datefmt="%H:%M:%S")
 
-    drone = DroneScanner(sitl_mode=args.sitl)
+    drone = DroneScanner(sitl_mode=args.sitl, vio_source=args.vio_source)
 
     server = HTTPServer(('0.0.0.0', args.port), ScanWebHandler)
     print(f"\n  gNNS Autonomous Scanner")
