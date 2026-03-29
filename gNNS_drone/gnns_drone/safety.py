@@ -99,12 +99,19 @@ class SafetyMonitor:
         self._failsafe_reason = reason
         logger.critical(f"FAILSAFE: {reason} -> {action}")
 
-        if action == "LAND":
-            self.bridge.land()
-        elif action == "RTH":
-            self.bridge.set_mode("RTL")
-        elif action == "DISARM":
-            self.bridge.disarm(force=True)
+        try:
+            if action == "LAND":
+                self.bridge.land()
+            elif action == "RTH":
+                self.bridge.set_mode("RTL")
+            elif action == "DISARM":
+                self.bridge.disarm(force=True)
+        except Exception as e:
+            logger.error(f"Failsafe action '{action}' failed: {e}, emergency disarm")
+            try:
+                self.bridge.disarm(force=True)
+            except Exception:
+                pass
 
     def _monitor_loop(self):
         """Main safety monitoring loop (runs at 2 Hz)."""
@@ -120,8 +127,15 @@ class SafetyMonitor:
                 if not self.bridge.is_connected:
                     self._trigger_failsafe("FC connection lost", "LAND")
 
-                # 2. Check odometry/SLAM health
+                # 2. Check odometry staleness
                 odom_data = self.odom.get()
+                if odom_data.is_stale:
+                    self._trigger_failsafe(
+                        f"Odometry stale (age={odom_data.age_sec:.1f}s)",
+                        self.vio_lost_action
+                    )
+
+                # 3. Check odometry/SLAM health
                 if odom_data.confidence < self.min_odom_confidence:
                     if self._low_confidence_start == 0:
                         self._low_confidence_start = time.time()
@@ -138,7 +152,7 @@ class SafetyMonitor:
                         logger.info(f"Odom confidence recovered: {odom_data.confidence}%")
                     self._low_confidence_start = 0.0
 
-                # 3. Check geofence
+                # 4. Check geofence
                 dist = math.sqrt(odom_data.x ** 2 + odom_data.y ** 2)
                 if dist > self.geofence_radius:
                     self._trigger_failsafe(
@@ -146,14 +160,14 @@ class SafetyMonitor:
                         "RTH"
                     )
 
-                # 4. Check altitude ceiling
+                # 5. Check altitude ceiling
                 if odom_data.altitude > self.max_altitude:
                     self._trigger_failsafe(
                         f"Altitude limit! {odom_data.altitude:.1f}m > {self.max_altitude}m",
                         "LAND"
                     )
 
-                # 5. Check battery
+                # 6. Check battery
                 batt = self.bridge.get_latest("BATTERY_STATUS")
                 if batt and hasattr(batt, 'battery_remaining'):
                     if 0 < batt.battery_remaining < self.min_battery_pct:
@@ -161,7 +175,7 @@ class SafetyMonitor:
                             f"Low battery: {batt.battery_remaining}%", "RTH"
                         )
 
-                # 6. Check EKF health
+                # 7. Check EKF health
                 ekf = self.bridge.get_latest("EKF_STATUS_REPORT")
                 if ekf and hasattr(ekf, 'flags'):
                     const_pos = bool(ekf.flags & 128)

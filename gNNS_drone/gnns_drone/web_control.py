@@ -673,24 +673,43 @@ class WebHandler(SimpleHTTPRequestHandler):
             self.wfile.write(json.dumps(state).encode())
 
         elif path == '/api/fly':
-            n = float(params.get('n', [0])[0])
-            e = float(params.get('e', [0])[0])
+            if not drone or not getattr(drone, 'connected', False):
+                self._json_err("Not connected", 503)
+                return
+            try:
+                n = float(params.get('n', [0])[0])
+                e = float(params.get('e', [0])[0])
+            except (ValueError, TypeError):
+                self._json_err("Invalid coordinates", 400)
+                return
             drone.fly_to(n, e)
             self._json_ok(f"Flying to ({n}, {e})")
 
         elif path == '/api/takeoff':
+            if not drone or not getattr(drone, 'connected', False):
+                self._json_err("Not connected", 503)
+                return
             threading.Thread(target=drone.takeoff, daemon=True).start()
             self._json_ok("Taking off")
 
         elif path == '/api/land':
+            if not drone or not getattr(drone, 'connected', False):
+                self._json_err("Not connected", 503)
+                return
             threading.Thread(target=drone.land, daemon=True).start()
             self._json_ok("Landing")
 
         elif path == '/api/home':
+            if not drone or not getattr(drone, 'connected', False):
+                self._json_err("Not connected", 503)
+                return
             drone.go_home()
             self._json_ok("Going home")
 
         elif path == '/api/hover':
+            if not drone or not getattr(drone, 'connected', False):
+                self._json_err("Not connected", 503)
+                return
             drone.hover()
             self._json_ok("Hovering")
 
@@ -707,6 +726,12 @@ class WebHandler(SimpleHTTPRequestHandler):
         self.send_header('Content-Type', 'application/json')
         self.end_headers()
         self.wfile.write(json.dumps({"ok": True, "msg": msg}).encode())
+
+    def _json_err(self, msg, code=400):
+        self.send_response(code)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        self.wfile.write(json.dumps({"ok": False, "error": msg}).encode())
 
 
 def main():

@@ -116,20 +116,19 @@ class Navigator:
         while self._fwd_running:
             data = self.odom.get()
 
-            if data.confidence > min_confidence:
-                # Good quality: send position + velocity
+            if data.is_stale:
+                logger.warning(f"Odom stale (age={data.age_sec:.1f}s), skipping FC send")
+            elif data.confidence > min_confidence:
                 self.bridge.send_vision_position(
                     data.x, data.y, data.z,
                     data.roll, data.pitch, data.yaw
                 )
                 self.bridge.send_vision_speed(data.vx, data.vy, data.vz)
             elif data.confidence > 10:
-                # Marginal: send position only (velocity might be noisy)
                 self.bridge.send_vision_position(
                     data.x, data.y, data.z,
                     data.roll, data.pitch, data.yaw
                 )
-            # Below 10%: skip entirely — garbage data
 
             time.sleep(interval)
 
@@ -214,9 +213,10 @@ class Navigator:
 
         self.fc.reset()
         home_ned = NEDCoord(0, 0, 0)
-        self._fly_to_waypoint(home_ned)
+        if not self._fly_to_waypoint(home_ned):
+            logger.warning("RTH navigation failed, landing at current position")
+            self.bridge.land()
 
-        # Precision land at home too
         self.lander.execute(0, 0)
 
         logger.info(f"\n  MISSION COMPLETE!")
@@ -261,8 +261,8 @@ class Navigator:
 
             if distance < self.config.arrival_radius:
                 logger.info(f"Reached waypoint area (dist={distance:.2f}m)")
-                # Decelerate smoothly to zero
                 for _ in range(10):
+                    data = self.odom.get()
                     result = self.fc.compute_waypoint_velocity(
                         target.north, target.east, self.config.cruise_altitude,
                         data.x, data.y, data.altitude

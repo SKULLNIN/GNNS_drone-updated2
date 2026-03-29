@@ -576,8 +576,10 @@ class MAVLinkBridge:
             down: Z position (meters, Down — NEGATIVE = UP)
             yaw: Target yaw in radians. NaN = don't change yaw.
         """
-        # type_mask: bitmask of fields to IGNORE
-        # 0b0000_1111_1111_1000 = use position only
+        if not _is_finite(north, east, down):
+            logger.warning("NaN/Inf in goto_position_ned! Skipping.")
+            return
+
         type_mask = 0b0000_1111_1111_1000
 
         if not math.isnan(yaw):

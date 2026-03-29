@@ -288,11 +288,9 @@ class VelocitySmoother:
         """
         now = time.time()
         if dt is None:
-            dt = now - self._prev_time if self._prev_time > 0 else 0.1
-        # Floor dt at 10ms — prevents near-zero dt when called
-        # immediately after PID in the same compute cycle
-        if dt < 0.01:
-            dt = 0.1  # Assume 10Hz control loop
+            dt = now - self._prev_time if self._prev_time > 0 else 0.02
+        if dt < 0.001:
+            dt = 0.02
         if dt > 1.0:
             dt = 0.1
         self._prev_time = now
@@ -467,8 +465,10 @@ class FlightController:
         if distance > self.config.slowdown_radius:
             speed_limit = self.config.cruise_max_speed
         elif distance > self.config.arrival_radius:
-            frac = (distance - self.config.arrival_radius) / \
-                   (self.config.slowdown_radius - self.config.arrival_radius)
+            denom = self.config.slowdown_radius - self.config.arrival_radius
+            if denom <= 0:
+                denom = 1.0
+            frac = (distance - self.config.arrival_radius) / denom
             speed_limit = 0.3 + frac * (self.config.cruise_max_speed - 0.3)
         else:
             speed_limit = 0.3
@@ -516,6 +516,9 @@ class FlightController:
         Returns:
             (vx, vy, vz) in NED frame (m/s)
         """
+        if any(math.isnan(v) for v in (offset_fwd, offset_right)):
+            return (0.0, 0.0, 0.0)
+
         # Select gains based on phase
         if phase == "final":
             gains = self.config.final_gains

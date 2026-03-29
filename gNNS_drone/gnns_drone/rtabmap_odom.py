@@ -103,6 +103,18 @@ class OdomData:
         """Altitude above start point (positive up)."""
         return -self.z
 
+    @property
+    def age_sec(self) -> float:
+        """Seconds since last odometry update."""
+        if self.timestamp <= 0:
+            return float('inf')
+        return time.time() - self.timestamp
+
+    @property
+    def is_stale(self) -> bool:
+        """True if odometry data is older than 2 seconds."""
+        return self.age_sec > 2.0
+
     @property 
     def distance_from_home(self) -> float:
         """Horizontal distance from start point."""
@@ -341,6 +353,7 @@ class RTABMapOdom:
         try:
             import rclpy
             from rclpy.node import Node
+            from rclpy.qos import qos_profile_sensor_data
             from nav_msgs.msg import Odometry
             from rtabmap_msgs.msg import Info
         except ImportError:
@@ -351,63 +364,68 @@ class RTABMapOdom:
             self._run_t265()
             return
 
-        rclpy.init()
+        if not rclpy.ok():
+            rclpy.init()
         node = rclpy.create_node('gnns_odom_subscriber')
 
-        def odom_callback(msg: Odometry):
-            """Process odometry from RTAB-Map."""
-            # Extract position (ROS2 uses ENU, convert to NED)
-            # ROS ENU: x=East, y=North, z=Up
-            # Our NED: x=North, y=East, z=Down
-            pos = msg.pose.pose.position
-            north = pos.y   # ROS Y (North) → NED X (North)
-            east = pos.x    # ROS X (East) → NED Y (East)
-            down = -pos.z   # ROS Z (Up) → NED Z (Down, so negate)
+        try:
+            def odom_callback(msg: Odometry):
+                """Process odometry from RTAB-Map."""
+                try:
+                    pos = msg.pose.pose.position
+                    north = pos.y
+                    east = pos.x
+                    down = -pos.z
 
-            # Extract orientation quaternion → euler
-            q = msg.pose.pose.orientation
-            # Convert quaternion to euler (roll, pitch, yaw)
-            sinr = 2.0 * (q.w * q.x + q.y * q.z)
-            cosr = 1.0 - 2.0 * (q.x * q.x + q.y * q.y)
-            roll = math.atan2(sinr, cosr)
+                    q = msg.pose.pose.orientation
+                    sinr = 2.0 * (q.w * q.x + q.y * q.z)
+                    cosr = 1.0 - 2.0 * (q.x * q.x + q.y * q.y)
+                    roll = math.atan2(sinr, cosr)
 
-            sinp = 2.0 * (q.w * q.y - q.z * q.x)
-            sinp = max(-1.0, min(1.0, sinp))
-            pitch = math.asin(sinp)
+                    sinp = 2.0 * (q.w * q.y - q.z * q.x)
+                    sinp = max(-1.0, min(1.0, sinp))
+                    pitch = math.asin(sinp)
 
-            siny = 2.0 * (q.w * q.z + q.x * q.y)
-            cosy = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
-            yaw = math.atan2(siny, cosy)
+                    siny = 2.0 * (q.w * q.z + q.x * q.y)
+                    cosy = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+                    yaw = math.atan2(siny, cosy)
 
-            # Covariance → confidence approximation
-            pos_cov = msg.pose.covariance[0]  # xx variance
-            confidence = max(0, min(100, int(100 - pos_cov * 100)))
+                    pos_cov = msg.pose.covariance[0]
+                    confidence = max(0, min(100, int(100 - pos_cov * 100)))
 
-            timestamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+                    timestamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
 
-            self._update_odom(
-                north, east, down, roll, pitch, yaw,
-                timestamp, confidence=confidence
+                    self._update_odom(
+                        north, east, down, roll, pitch, yaw,
+                        timestamp, confidence=confidence
+                    )
+                except Exception as e:
+                    logger.error(f"odom_callback error: {e}")
+
+            def info_callback(msg: Info):
+                """Process RTAB-Map info (loop closures, features)."""
+                try:
+                    if msg.loop_closure_id > 0:
+                        with self._odom_lock:
+                            self._odom.loop_closure_id = msg.loop_closure_id
+                            self._odom.num_features = msg.ref_words
+                            self._odom.num_inliers = msg.loop_closure_transform_accepted
+                except Exception as e:
+                    logger.error(f"info_callback error: {e}")
+
+            node.create_subscription(
+                Odometry, '/odom', odom_callback, qos_profile_sensor_data
+            )
+            node.create_subscription(
+                Info, '/rtabmap/info', info_callback, qos_profile_sensor_data
             )
 
-        def info_callback(msg: Info):
-            """Process RTAB-Map info (loop closures, features)."""
-            if msg.loop_closure_id > 0:
-                with self._odom_lock:
-                    self._odom.loop_closure_id = msg.loop_closure_id
-                    self._odom.num_features = msg.ref_words
-                    self._odom.num_inliers = msg.loop_closure_transform_accepted
+            logger.info("Subscribed to /odom and /rtabmap/info")
 
-        node.create_subscription(Odometry, '/odom', odom_callback, 10)
-        node.create_subscription(Info, '/rtabmap/info', info_callback, 10)
-
-        logger.info("Subscribed to /odom and /rtabmap/info")
-
-        while self._running:
-            rclpy.spin_once(node, timeout_sec=0.1)
-
-        node.destroy_node()
-        rclpy.shutdown()
+            while self._running:
+                rclpy.spin_once(node, timeout_sec=0.1)
+        finally:
+            node.destroy_node()
 
     # ==============================================================
     # T265 RAW MODE — Direct T265 tracking (fallback)

@@ -189,6 +189,7 @@ class ORBSLAM3Odom:
         try:
             import rclpy
             from rclpy.node import Node
+            from rclpy.qos import qos_profile_sensor_data
             from nav_msgs.msg import Odometry
         except ImportError:
             logger.error(
@@ -204,83 +205,93 @@ class ORBSLAM3Odom:
             has_rtabmap = False
             RtabmapInfo = None
 
-        rclpy.init()
+        if not rclpy.ok():
+            rclpy.init()
         node = rclpy.create_node("gnns_orbslam3_odom_subscriber")
 
-        def odom_callback(msg: Odometry):
-            pos = msg.pose.pose.position
-            twist = msg.twist.twist
+        try:
+            def odom_callback(msg: Odometry):
+                try:
+                    pos = msg.pose.pose.position
+                    twist = msg.twist.twist
 
-            use_twist = all(
-                math.isfinite(getattr(twist.linear, c, float("nan")))
-                for c in ("x", "y", "z")
-            ) and all(
-                abs(getattr(twist.linear, c, 0)) < 50 for c in ("x", "y", "z")
-            )
-
-            if self._frame_convention == "ros_enu_to_ned":
-                north, east, down = _ros_enu_to_ned(pos.x, pos.y, pos.z)
-                if use_twist:
-                    vn, ve, vd = _ros_enu_vel_to_ned(
-                        twist.linear.x, twist.linear.y, twist.linear.z
-                    )
-                else:
-                    vn = ve = vd = None
-            else:
-                north, east, down = pos.x, pos.y, pos.z
-                vn = twist.linear.x if use_twist else None
-                ve = twist.linear.y if use_twist else None
-                vd = twist.linear.z if use_twist else None
-
-            q = msg.pose.pose.orientation
-            sinr = 2.0 * (q.w * q.x + q.y * q.z)
-            cosr = 1.0 - 2.0 * (q.x * q.x + q.y * q.y)
-            roll = math.atan2(sinr, cosr)
-
-            sinp = 2.0 * (q.w * q.y - q.z * q.x)
-            sinp = max(-1.0, min(1.0, sinp))
-            pitch = math.asin(sinp)
-
-            siny = 2.0 * (q.w * q.z + q.x * q.y)
-            cosy = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
-            yaw = math.atan2(siny, cosy)
-
-            pos_cov = msg.pose.covariance[0] if len(msg.pose.covariance) > 0 else 0
-            confidence = max(0, min(100, int(100 - pos_cov * 100)))
-
-            timestamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
-
-            self._update_odom(
-                north, east, down, roll, pitch, yaw,
-                timestamp,
-                vx=vn, vy=ve, vz=vd,
-                confidence=confidence,
-            )
-
-        def info_callback(msg):
-            if hasattr(msg, "loop_closure_id") and msg.loop_closure_id > 0:
-                with self._odom_lock:
-                    self._odom.loop_closure_id = msg.loop_closure_id
-                    self._odom.num_features = getattr(msg, "ref_words", 0)
-                    self._odom.num_inliers = getattr(
-                        msg, "loop_closure_transform_accepted", 0
+                    use_twist = all(
+                        math.isfinite(getattr(twist.linear, c, float("nan")))
+                        for c in ("x", "y", "z")
+                    ) and all(
+                        abs(getattr(twist.linear, c, 0)) < 50 for c in ("x", "y", "z")
                     )
 
-        node.create_subscription(Odometry, self._odom_topic, odom_callback, 10)
+                    if self._frame_convention == "ros_enu_to_ned":
+                        north, east, down = _ros_enu_to_ned(pos.x, pos.y, pos.z)
+                        if use_twist:
+                            vn, ve, vd = _ros_enu_vel_to_ned(
+                                twist.linear.x, twist.linear.y, twist.linear.z
+                            )
+                        else:
+                            vn = ve = vd = None
+                    else:
+                        north, east, down = pos.x, pos.y, pos.z
+                        vn = twist.linear.x if use_twist else None
+                        ve = twist.linear.y if use_twist else None
+                        vd = twist.linear.z if use_twist else None
 
-        if has_rtabmap and self._rtabmap_info_topic and RtabmapInfo:
+                    q = msg.pose.pose.orientation
+                    sinr = 2.0 * (q.w * q.x + q.y * q.z)
+                    cosr = 1.0 - 2.0 * (q.x * q.x + q.y * q.y)
+                    roll = math.atan2(sinr, cosr)
+
+                    sinp = 2.0 * (q.w * q.y - q.z * q.x)
+                    sinp = max(-1.0, min(1.0, sinp))
+                    pitch = math.asin(sinp)
+
+                    siny = 2.0 * (q.w * q.z + q.x * q.y)
+                    cosy = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+                    yaw = math.atan2(siny, cosy)
+
+                    pos_cov = msg.pose.covariance[0] if len(msg.pose.covariance) > 0 else 0
+                    confidence = max(0, min(100, int(100 - pos_cov * 100)))
+
+                    timestamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+
+                    self._update_odom(
+                        north, east, down, roll, pitch, yaw,
+                        timestamp,
+                        vx=vn, vy=ve, vz=vd,
+                        confidence=confidence,
+                    )
+                except Exception as e:
+                    logger.error(f"odom_callback error: {e}")
+
+            def info_callback(msg):
+                try:
+                    if hasattr(msg, "loop_closure_id") and msg.loop_closure_id > 0:
+                        with self._odom_lock:
+                            self._odom.loop_closure_id = msg.loop_closure_id
+                            self._odom.num_features = getattr(msg, "ref_words", 0)
+                            self._odom.num_inliers = getattr(
+                                msg, "loop_closure_transform_accepted", 0
+                            )
+                except Exception as e:
+                    logger.error(f"info_callback error: {e}")
+
             node.create_subscription(
-                RtabmapInfo, self._rtabmap_info_topic, info_callback, 10
+                Odometry, self._odom_topic, odom_callback, qos_profile_sensor_data
             )
-            logger.info(f"Subscribed to {self._odom_topic} and {self._rtabmap_info_topic}")
-        else:
-            logger.info(f"Subscribed to {self._odom_topic}")
 
-        while self._running:
-            rclpy.spin_once(node, timeout_sec=0.1)
+            if has_rtabmap and self._rtabmap_info_topic and RtabmapInfo:
+                node.create_subscription(
+                    RtabmapInfo, self._rtabmap_info_topic, info_callback,
+                    qos_profile_sensor_data
+                )
+                logger.info(f"Subscribed to {self._odom_topic} and {self._rtabmap_info_topic}")
+            else:
+                logger.info(f"Subscribed to {self._odom_topic}")
 
-        node.destroy_node()
-        rclpy.shutdown()
+            while self._running:
+                rclpy.spin_once(node, timeout_sec=0.1)
+        finally:
+            node.destroy_node()
 
     def print_status(self):
         """Print current odometry status."""
