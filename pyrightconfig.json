@@ -1,0 +1,25 @@
+{
+  "pythonVersion": "3.11",
+  "pythonPlatform": "Linux",
+  "venvPath": ".",
+  "venv": ".venv",
+  "extraPaths": [
+    "gNNS_drone"
+  ],
+  "include": [
+    "gNNS_drone"
+  ],
+  "exclude": [
+    "**/__pycache__",
+    "**/node_modules",
+    ".venv",
+    "gNNS_drone/mavlink_dialect",
+    "gNNS_drone/sitl",
+    "gNNS_drone/autonomy_core"
+  ],
+  "reportMissingModuleSource": false,
+  "reportMissingImports": "warning",
+  "reportMissingTypeStubs": false,
+  "reportGeneralTypeIssues": "warning",
+  "typeCheckingMode": "basic"
+}
