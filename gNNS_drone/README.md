@@ -77,3 +77,12 @@ gNNS_drone/
 ├── requirements.txt
 └── README.md
 ```
+
+## Documentation
+
+| Guide | Description |
+|-------|-------------|
+| [Jetson-to-Laptop Setup](docs/JETSON_LAPTOP_SETUP.md) | Network, SSH, DDS, `ros_bridge.sh`, `laptop_rviz2.sh`, RViz2 displays, bandwidth, troubleshooting |
+| [Full Mission Guide](docs/MISSION_GUIDE.md) | Hardware overview, FC parameters, config files, VIO bringup, running the mission, web control, safety, pre-flight checklist |
+| [SITL Simulation Guide](docs/SITL_GUIDE.md) | ArduPilot SITL setup, test scripts, Gazebo, connection details, troubleshooting |
+| [ROS2 VIO Setup](docs/ROS2_VIO_SETUP.md) | RealSense + ORB-SLAM3 / RTAB-Map bring-up order, calibration, EKF tuning |
