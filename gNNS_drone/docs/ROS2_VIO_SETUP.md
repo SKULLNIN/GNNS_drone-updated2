@@ -7,7 +7,7 @@ Exact bring-up order for RealSense, IMU/TF, ORB-SLAM3, and RTAB-Map with gNNS Dr
 - ROS2 Humble or Jazzy
 - `realsense2_camera` (ROS2)
 - ORB-SLAM3 ROS2 wrapper (RGB-D + inertial)
-- `rtabmap_ros` (ROS2)
+- `rtabmap_launch` (ROS 2; provides `rtabmap.launch.py` on Humble/Jazzy)
 - `nav_msgs`, `sensor_msgs`, `tf2_ros`
 - RealSense camera (D435i / D455) with IMU source bridged to ROS2
 
@@ -81,7 +81,7 @@ ros2 topic echo /odom --no-arr
 RTAB-Map runs in parallel for mapping. It does **not** need to publish odometry for FC control (ORB-SLAM3 provides that).
 
 ```bash
-ros2 launch rtabmap_ros rtabmap.launch.py \
+ros2 launch rtabmap_launch rtabmap.launch.py \
   rgb_topic:=/camera/color/image_raw \
   depth_topic:=/camera/aligned_depth_to_color/image_raw \
   camera_info_topic:=/camera/color/camera_info \

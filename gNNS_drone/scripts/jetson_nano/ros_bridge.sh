@@ -12,21 +12,21 @@
 #   ./ros_bridge.sh --viz-only --imu --pointcloud  # everything for RViz2
 #   ./ros_bridge.sh --print-only             # dry run, no ROS needed
 #   ./ros_bridge.sh --no-tmux                # foreground (for systemd)
-#   ./ros_bridge.sh --cyclone-iface wlan0    # pin CycloneDDS to WiFi NIC
 #   ./ros_bridge.sh --light-maps             # lower RTAB-Map cloud bandwidth
 #   ./ros_bridge.sh --rtabmap-gui            # enable rtabmap_viz on Jetson (heavy)
 #
 # On laptop:
 #   ./scripts/jetson_nano/laptop_rviz2.sh 42
 # ================================================================
-set -euo pipefail
+# Do not use set -u — ROS setup.bash uses unset vars (e.g. AMENT_TRACE_SETUP_FILES).
+set -eo pipefail
 
 # ---- Defaults ----
 ROS_DISTRO_DEFAULT="${ROS_DISTRO:-humble}"
 ROS_SETUP="/opt/ros/${ROS_DISTRO_DEFAULT}/setup.bash"
 OVERLAY_SETUP=""
 DOMAIN_ID="${ROS_DOMAIN_ID:-42}"
-RMW="${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}"
+RMW="${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}"
 # Multi-machine DDS: never use localhost-only for the bridge (ignore prior env).
 LOCALHOST="0"
 ODOM_SOURCE="ros2"
@@ -43,10 +43,6 @@ RTAB_LIGHT_MAPS=0
 MISSION_ARGS=()
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-
-# shellcheck source=cyclonedds_env.sh
-# shellcheck disable=SC1091
-source "${SCRIPT_DIR}/cyclonedds_env.sh"
 
 # Optional workspace overlay
 for overlay in "$HOME/ros2_ws/install/setup.bash" \
@@ -80,7 +76,6 @@ while [[ $# -gt 0 ]]; do
         --viz-only)      VIZ_ONLY=1; shift ;;
         --pointcloud)    POINTCLOUD=1; shift ;;
         --imu)           IMU=1; shift ;;
-        --cyclone-iface) require_arg "$1" "${2:-}"; export CYCLONE_IFACE="$2"; shift 2 ;;
         --cloud-map)     shift ;;  # RTAB-Map publishes cloud/grid by default; for documentation
         --grid-map)      shift ;;
         --light-maps)    RTAB_LIGHT_MAPS=1; shift ;;
@@ -90,8 +85,6 @@ while [[ $# -gt 0 ]]; do
         *)               MISSION_ARGS+=("$1"); shift ;;
     esac
 done
-
-gnns_set_cyclonedds_uri
 
 # Export DDS variables
 export ROS_DOMAIN_ID="$DOMAIN_ID"
@@ -105,18 +98,38 @@ if [[ "$PRINT_ONLY" != "1" && ! -f "$ROS_SETUP" ]]; then
     exit 2
 fi
 
+# ROS 2 Humble/Jazzy: rtabmap.launch.py lives in rtabmap_launch, not rtabmap_ros.
+gnns_rtabmap_launch_package() {
+    local distro="$ROS_DISTRO_DEFAULT"
+    local opt_share="/opt/ros/${distro}/share"
+    local ws_share=""
+    if [[ -n "${OVERLAY_SETUP:-}" ]]; then
+        ws_share="$(cd "$(dirname "$OVERLAY_SETUP")/.." && pwd)/share"
+    fi
+    local s
+    for s in "$ws_share" "$opt_share"; do
+        [[ -z "$s" || ! -d "$s" ]] && continue
+        if [[ -f "$s/rtabmap_launch/launch/rtabmap.launch.py" ]]; then
+            echo "rtabmap_launch"
+            return 0
+        fi
+        if [[ -f "$s/rtabmap_ros/launch/rtabmap.launch.py" ]]; then
+            echo "rtabmap_ros"
+            return 0
+        fi
+    done
+    echo "rtabmap_launch"
+}
+
 # ================================================================
 # Command generators (each prints a bash snippet for a tmux pane)
 # ================================================================
 
 dds_env_snippet() {
-    local quri
-    quri="$(printf '%q' "${CYCLONEDDS_URI:-}")"
     cat <<EOF
 export ROS_DOMAIN_ID="$DOMAIN_ID"
 export ROS_LOCALHOST_ONLY="$LOCALHOST"
 export RMW_IMPLEMENTATION="$RMW"
-export CYCLONEDDS_URI=$quri
 EOF
 }
 
@@ -135,12 +148,14 @@ EOF
 }
 
 rtabmap_cmd() {
+    local rtab_pkg
+    rtab_pkg="$(gnns_rtabmap_launch_package)"
     if [[ "$RTAB_LIGHT_MAPS" == "1" ]]; then
         cat <<EOF
 source "$ROS_SETUP"
 ${OVERLAY_SETUP:+source "$OVERLAY_SETUP"}
 $(dds_env_snippet)
-ros2 launch rtabmap_ros rtabmap.launch.py \\
+ros2 launch ${rtab_pkg} rtabmap.launch.py \\
   rgb_topic:=/camera/color/image_raw \\
   depth_topic:=/camera/depth/image_rect_raw \\
   camera_info_topic:=/camera/color/camera_info \\
@@ -160,7 +175,7 @@ EOF
 source "$ROS_SETUP"
 ${OVERLAY_SETUP:+source "$OVERLAY_SETUP"}
 $(dds_env_snippet)
-ros2 launch rtabmap_ros rtabmap.launch.py \\
+ros2 launch ${rtab_pkg} rtabmap.launch.py \\
   rgb_topic:=/camera/color/image_raw \\
   depth_topic:=/camera/depth/image_rect_raw \\
   camera_info_topic:=/camera/color/camera_info \\
@@ -302,7 +317,6 @@ echo "  ┌───────────────────────
 echo "  │  tmux session: $TMUX_SESSION            │"
 echo "  │  ROS_DOMAIN_ID=$DOMAIN_ID               │"
 echo "  │  RMW=$RMW                               │"
-echo "  │  CYCLONEDDS_URI set                     │"
 echo "  │  Attach: tmux attach -t $TMUX_SESSION   │"
 echo "  │                                         │"
 echo "  │  On laptop:                             │"

@@ -1,131 +1,59 @@
 #!/usr/bin/env bash
 # ================================================================
-# laptop_rviz2.sh — Laptop-side RViz2 viewer for gNNS Drone
+# laptop_rviz2.sh — Laptop RViz2 for gNNS (Jetson topics over DDS)
 # ================================================================
-# Sets up DDS environment and launches RViz2 to visualize topics
-# streamed from the Jetson over WiFi.
+# Uses Fast DDS by default (same as d455_launch.sh / rtabmap_vio.sh).
+# Optional first argument: ROS_DOMAIN_ID (number), e.g. 42
 #
 # Usage:
-#   ./laptop_rviz2.sh              # domain 42, humble, full RViz layout
-#   ./laptop_rviz2.sh 42           # explicit domain
-#   ./laptop_rviz2.sh 42 jazzy     # domain + distro
-#   ./laptop_rviz2.sh humble       # just distro
-#   ./laptop_rviz2.sh --topics-only
-#   ./laptop_rviz2.sh 42 --topics-only
-#   ./laptop_rviz2.sh --cyclone-iface wlan0
+#   chmod +x scripts/jetson_nano/laptop_rviz2.sh   # if Permission denied
+#   ./scripts/jetson_nano/laptop_rviz2.sh
+#   ./scripts/jetson_nano/laptop_rviz2.sh 42
 # ================================================================
-set -euo pipefail
+# Do not use set -u — ROS setup.bash references unset variables.
+set -eo pipefail
 
-DOMAIN_ID="${ROS_DOMAIN_ID:-42}"
 ROS_DISTRO="${ROS_DISTRO:-humble}"
-TOPICS_ONLY=0
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-
-# shellcheck source=cyclonedds_env.sh
-# shellcheck disable=SC1091
-source "${SCRIPT_DIR}/cyclonedds_env.sh"
-
-# ---- Argument parsing (domain / distro / flags) ----
-POSITIONAL=()
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        --topics-only) TOPICS_ONLY=1; shift ;;
-        --cyclone-iface)
-            if [[ -z "${2:-}" ]]; then echo "[Error] --cyclone-iface needs a value" >&2; exit 2; fi
-            export CYCLONE_IFACE="$2"
-            shift 2
-            ;;
-        -*) echo "[Error] Unknown flag: $1" >&2; exit 2 ;;
-        *) POSITIONAL+=("$1"); shift ;;
-    esac
-done
-set -- "${POSITIONAL[@]}"
-
-if [[ $# -eq 0 ]]; then
-    :
-elif [[ $# -eq 1 ]]; then
-    if [[ "$1" =~ ^[0-9]+$ ]]; then
-        DOMAIN_ID="$1"
-    elif [[ "$1" =~ ^(humble|jazzy|iron|foxy)$ ]]; then
-        ROS_DISTRO="$1"
-    else
-        echo "[Error] Unknown argument: $1 (use a number for domain, or humble|jazzy|...)" >&2
-        exit 2
-    fi
-else
-    DOMAIN_ID="$1"
-    ROS_DISTRO="$2"
-fi
-
-RMW="${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}"
 SETUP="/opt/ros/${ROS_DISTRO}/setup.bash"
-
 if [[ ! -f "$SETUP" ]]; then
-    echo "[Error] Missing: $SETUP" >&2
-    echo "Install ROS 2 ${ROS_DISTRO} on this machine, or pass distro as second arg." >&2
+    echo "[Error] Missing $SETUP — install ROS 2 $ROS_DISTRO" >&2
     exit 2
 fi
 
-export ROS_DOMAIN_ID="$DOMAIN_ID"
-export ROS_LOCALHOST_ONLY=0
-export RMW_IMPLEMENTATION="$RMW"
-
-gnns_set_cyclonedds_uri
-
-# ament/ros2: force Python 3 used by CLI and RViz2 (fixes mixed venv/conda interpreter errors)
-if _py="$(which python3 2>/dev/null)" && [[ -n "$_py" ]]; then
-    export AMENT_PYTHON_EXECUTABLE="$_py"
+if [[ "${1:-}" =~ ^[0-9]+$ ]]; then
+    export ROS_DOMAIN_ID="$1"
+    shift
 fi
-unset _py
+
+export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-42}"
+export ROS_LOCALHOST_ONLY="${ROS_LOCALHOST_ONLY:-0}"
+export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}"
 
 # shellcheck source=/dev/null
 source "$SETUP"
-
-# Optional workspace overlay (same pattern as ros_bridge.sh on Jetson)
 if [[ -f "$HOME/ros2_ws/install/setup.bash" ]]; then
     # shellcheck source=/dev/null
     source "$HOME/ros2_ws/install/setup.bash"
-elif [[ -f "$PROJECT_ROOT/ros2_ws/install/setup.bash" ]]; then
-    # shellcheck source=/dev/null
-    source "$PROJECT_ROOT/ros2_ws/install/setup.bash"
 fi
 
 if ! command -v ros2 >/dev/null 2>&1; then
-    echo "[Error] 'ros2' not in PATH after sourcing $SETUP" >&2
+    echo "[Error] ros2 not in PATH after sourcing $SETUP" >&2
     exit 2
 fi
 
 echo ""
-echo "  ┌──────────────────────────────────────┐"
-echo "  │  gNNS Drone — Laptop RViz2 Viewer    │"
-echo "  │  ROS_DOMAIN_ID=$DOMAIN_ID            │"
-echo "  │  RMW=$RMW                            │"
-echo "  │  Distro=$ROS_DISTRO                  │"
-echo "  └──────────────────────────────────────┘"
+echo "  gNNS — Laptop RViz2  |  ROS_DOMAIN_ID=$ROS_DOMAIN_ID  |  RMW=$RMW_IMPLEMENTATION"
 echo ""
-echo "  Listing topics from Jetson..."
-ros2 topic list 2>/dev/null || echo "  (no topics yet — is the Jetson running?)"
+echo "  Topics from Jetson:"
+ros2 topic list 2>/dev/null || echo "  (none — is the Jetson running?)"
 echo ""
 
-if [[ "$TOPICS_ONLY" == "1" ]]; then
-    echo "  (--topics-only: exiting)"
-    exit 0
-fi
-
-RVIZ_CFG="${PROJECT_ROOT}/config/drone_monitor.rviz"
-RVIZ_ARGS=()
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RVIZ_CFG="$(cd "$SCRIPT_DIR/../.." && pwd)/config/drone_monitor.rviz"
 if [[ -f "$RVIZ_CFG" ]]; then
-    RVIZ_ARGS=(-d "$RVIZ_CFG")
-    echo "  Using RViz config: $RVIZ_CFG"
+    echo "  Launching RViz2 with: $RVIZ_CFG"
+    exec ros2 run rviz2 rviz2 -d "$RVIZ_CFG"
 else
-    echo "  [Warn] Missing $RVIZ_CFG — starting blank RViz2"
+    echo "  [Warn] No drone_monitor.rviz — starting blank RViz2"
+    exec ros2 run rviz2 rviz2
 fi
-
-echo ""
-echo "  Launching RViz2..."
-echo "  Tip: Fixed Frame can be 'odom' or 'map' depending on what you visualize."
-echo ""
-
-ros2 run rviz2 rviz2 "${RVIZ_ARGS[@]}"

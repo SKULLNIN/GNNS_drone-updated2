@@ -15,7 +15,7 @@ Pipeline:
                                          → Loop Closures
 
 This module can run RTAB-Map in two ways:
-  1. ROS2 mode: subscribes to /odom from rtabmap_ros
+  1. ROS2 mode: subscribes to /odom from rtabmap (rtabmap_launch / rtabmap_ros)
   2. Standalone mode: uses rtabmap Python bindings directly
 """
 
@@ -337,11 +337,11 @@ class RTABMapOdom:
         
         Requires:
           - ROS2 Humble/Foxy installed
-          - rtabmap_ros package running
+          - rtabmap ROS 2 nodes running (e.g. rtabmap.launch.py from rtabmap_launch)
           - D435i publishing to /camera/depth and /camera/color topics
           
         Launch RTAB-Map with:
-          ros2 launch rtabmap_ros rtabmap.launch.py \\
+          ros2 launch rtabmap_launch rtabmap.launch.py \\
             rgb_topic:=/camera/color/image_raw \\
             depth_topic:=/camera/depth/image_raw \\
             camera_info_topic:=/camera/color/camera_info \\
@@ -358,7 +358,7 @@ class RTABMapOdom:
             from rtabmap_msgs.msg import Info
         except ImportError:
             logger.error(
-                "ROS2 not installed! Install ROS2 Humble and rtabmap_ros.\n"
+                "ROS2 not installed! Install ROS2 Humble and ros-humble-rtabmap-launch.\n"
                 "Falling back to T265 raw mode."
             )
             self._run_t265()

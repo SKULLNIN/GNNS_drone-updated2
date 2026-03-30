@@ -19,9 +19,12 @@
         <!--GNNS_CYCLONE_IFACE-->
       </Interfaces>
     </General>
-    <Internal>
-      <SocketReceiveBufferSize min="4MiB" max="16MiB"/>
-      <SocketSendBufferSize min="4MiB" max="16MiB"/>
-    </Internal>
+    <!--
+      Do not set SocketReceiveBufferSize minimum here: on Jetson/Linux the kernel
+      often caps rmem (e.g. ~416 KiB), and CycloneDDS will fail to create the domain
+      if min cannot be met ("failed to increase socket receive buffer size").
+      Defaults request ~1 MiB but accept whatever the OS allows.
+      Optional tuning (root): sysctl -w net.core.rmem_max=8388608 net.core.wmem_max=8388608
+    -->
   </Domain>
 </CycloneDDS>

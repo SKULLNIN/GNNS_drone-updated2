@@ -2,6 +2,10 @@
 # ================================================================
 # cyclonedds_env.sh — shared CycloneDDS URI setup for gNNS bridge
 # ================================================================
+# Legacy / optional. Main scripts use Fast DDS (rmw_fastrtps_cpp).
+# Do not use set -u — breaks when mixed with ROS setup.bash.
+set -eo pipefail
+
 # Source after PROJECT_ROOT is set (directory containing config/).
 #
 #   export CYCLONE_IFACE=wlan0   # optional: pin to WiFi / Ethernet NIC

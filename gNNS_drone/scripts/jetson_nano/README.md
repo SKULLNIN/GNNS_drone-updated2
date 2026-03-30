@@ -2,6 +2,22 @@
 
 Run the mission directly on the Jetson Nano with minimal setup.
 
+## Jetson + laptop (D455 + RTAB-Map + RViz)
+
+Simple two-process flow (see `docs/JETSON_LAPTOP_SETUP.md`):
+
+```bash
+# Jetson — two terminals
+./scripts/jetson_nano/d455_launch.sh
+./scripts/jetson_nano/rtabmap_vio.sh
+
+# Laptop
+chmod +x scripts/jetson_nano/laptop_rviz2.sh scripts/jetson_nano/verify_bridge.sh
+./scripts/jetson_nano/laptop_rviz2.sh 42
+```
+
+Use `ROS_DOMAIN_ID`, `ROS_LOCALHOST_ONLY=0`, and `RMW_IMPLEMENTATION=rmw_fastrtps_cpp` on both machines (scripts set these).
+
 ## Quick run
 
 From the **project root** on the Jetson Nano:

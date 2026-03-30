@@ -86,11 +86,11 @@ chmod +x scripts/jetson_nano/setup_jetson_nano.sh
 # RealSense ROS 2 driver
 sudo apt install ros-humble-realsense2-camera
 
-# RTAB-Map ROS 2
-sudo apt install ros-humble-rtabmap-ros
+# RTAB-Map ROS 2 (launch files are in rtabmap_launch on Humble)
+sudo apt install ros-humble-rtabmap-launch
 
-# CycloneDDS (must match laptop)
-sudo apt install ros-humble-rmw-cyclonedds-cpp
+# Fast DDS RMW (default on Humble; install if minimal ROS image)
+sudo apt install ros-humble-rmw-fastrtps-cpp
 
 # Verify D455 is detected
 rs-enumerate-devices | head -5
@@ -105,39 +105,55 @@ rs-enumerate-devices | head -5
 # Visualization
 sudo apt install ros-humble-rviz2 ros-humble-rqt ros-humble-image-transport-plugins
 
-# CycloneDDS (must match Jetson)
-sudo apt install ros-humble-rmw-cyclonedds-cpp
+# Fast DDS RMW (match Jetson)
+sudo apt install ros-humble-rmw-fastrtps-cpp
 ```
 
 ---
 
-## 5. DDS Environment Variables
+## 5. DDS environment (match on both machines)
 
-Both machines must agree on these three values. They are set automatically by
-`ros_bridge.sh` and `laptop_rviz2.sh`, but here they are for reference:
+Scripts set these for you. For `~/.bashrc`, use:
 
 | Variable | Value | Purpose |
 |----------|-------|---------|
-| `ROS_DOMAIN_ID` | `42` | Isolates your topics from other ROS networks |
-| `ROS_LOCALHOST_ONLY` | `0` | Allows cross-machine DDS discovery |
-| `RMW_IMPLEMENTATION` | `rmw_cyclonedds_cpp` | Both machines must use the same DDS vendor |
-| `CYCLONEDDS_URI` | `file://.../config/cyclonedds.xml` (generated) | Set automatically by `ros_bridge.sh` / `laptop_rviz2.sh` via `cyclonedds_env.sh` |
+| `ROS_DOMAIN_ID` | `42` | Same domain on Jetson and laptop |
+| `ROS_LOCALHOST_ONLY` | `0` | Required for cross-machine discovery |
+| `RMW_IMPLEMENTATION` | `rmw_fastrtps_cpp` | Same RMW on both (default Humble) |
 
 ```bash
 export ROS_DOMAIN_ID=42
 export ROS_LOCALHOST_ONLY=0
-export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-```
-
-Optional: pin DDS to your WiFi interface if discovery is flaky:
-
-```bash
-export CYCLONE_IFACE=wlan0   # or wlp2s0, enp0s3, etc.
+export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 ```
 
 ---
 
-## 6. Launch on Jetson: `ros_bridge.sh`
+## 6. Simple workflow (recommended)
+
+Use two terminals on the **Jetson**, then RViz on the **laptop**. Topic prefix is `/camera/camera/...` (see `d455_launch.sh`).
+
+```bash
+# On Jetson — terminal 1
+cd ~/gNNS_drone
+chmod +x scripts/jetson_nano/d455_launch.sh scripts/jetson_nano/rtabmap_vio.sh
+./scripts/jetson_nano/d455_launch.sh
+
+# On Jetson — terminal 2 (after camera is up)
+./scripts/jetson_nano/rtabmap_vio.sh
+
+# On laptop
+cd ~/gNNS_drone
+chmod +x scripts/jetson_nano/laptop_rviz2.sh scripts/jetson_nano/verify_bridge.sh
+./scripts/jetson_nano/verify_bridge.sh
+./scripts/jetson_nano/laptop_rviz2.sh 42
+```
+
+RViz loads [`config/drone_monitor.rviz`](../config/drone_monitor.rviz) when present. If you see **Permission denied**, run `chmod +x` on the script (Git clones may not preserve `+x`).
+
+---
+
+## 7. Optional: all-in-one tmux — `ros_bridge.sh`
 
 `scripts/jetson_nano/ros_bridge.sh` starts everything inside tmux.
 
@@ -175,7 +191,6 @@ cd ~/gNNS_drone
 | `--distro NAME` | ROS distro: `humble`, `jazzy`, etc. |
 | `--mavlink-out IP:PORT` | Forward MAVLink to laptop for QGroundControl |
 | `--session NAME` | tmux session name (default `drone`) |
-| `--cyclone-iface IFACE` | CycloneDDS `NetworkInterface` name (e.g. `wlan0`) |
 | `--light-maps` | Lower RTAB-Map cloud bandwidth (`cloud_decimation 8`) |
 | `--rtabmap-gui` | Enable `rtabmap_viz` on Jetson (default off, saves GPU/CPU) |
 | `--cloud-map` / `--grid-map` | No-op flags (maps publish by default; for script clarity) |
@@ -193,40 +208,14 @@ Kill: `tmux kill-session -t drone`
 
 ---
 
-## 7. Launch on Laptop: `laptop_rviz2.sh`
+## 8. `laptop_rviz2.sh` / `verify_bridge.sh` (reference)
 
-```bash
-cd ~/gNNS_drone
-./scripts/jetson_nano/laptop_rviz2.sh 42
-```
-
-The script sources ROS, sets DDS variables (including `CYCLONEDDS_URI` from
-`config/cyclonedds.xml`), lists available topics from the Jetson, and opens
-RViz2 with [`config/drone_monitor.rviz`](../config/drone_monitor.rviz) when present.
-
-Usage variants:
-
-```bash
-./laptop_rviz2.sh              # domain 42, humble
-./laptop_rviz2.sh 42           # explicit domain
-./laptop_rviz2.sh 42 jazzy     # domain + distro
-./laptop_rviz2.sh humble       # just distro
-./laptop_rviz2.sh --topics-only           # list topics and exit (quick check)
-./laptop_rviz2.sh 42 --cyclone-iface wlan0
-```
-
-### Verify connectivity: `verify_bridge.sh`
-
-On the laptop (Jetson stack running):
-
-```bash
-./scripts/jetson_nano/verify_bridge.sh
-./scripts/jetson_nano/verify_bridge.sh 42 --no-hz
-```
+- **`laptop_rviz2.sh`** — optional first argument: domain id (e.g. `42`). Set `ROS_DISTRO` if not `humble`. Lists topics, then starts RViz2 with `config/drone_monitor.rviz` when present.
+- **`verify_bridge.sh`** — optional first argument: domain id. Prints `ros2 topic list` and samples `/odom` and camera RGB (`/camera/camera/...` or `/camera/...`).
 
 ---
 
-## 8. Manual RViz2 Setup
+## 9. Manual RViz2 Setup
 
 If you prefer to set up manually instead of using the helper script:
 
@@ -234,7 +223,7 @@ If you prefer to set up manually instead of using the helper script:
 source /opt/ros/humble/setup.bash
 export ROS_DOMAIN_ID=42
 export ROS_LOCALHOST_ONLY=0
-export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 
 ros2 topic list              # verify Jetson topics are visible
 ros2 run rviz2 rviz2
@@ -246,11 +235,11 @@ Set **Fixed Frame** to `odom`, then add these displays:
 
 | Display Type | Topic | What You See |
 |-------------|-------|-------------|
-| Image | `/camera/color/image_raw` | Live RGB camera feed |
-| PointCloud2 | `/camera/depth/color/points` | 3D depth cloud (needs `--pointcloud`) |
-| Odometry | `/odom` | Drone position + trail |
+| Image | `/camera/camera/color/image_raw` | Live RGB (with `d455_launch.sh`) |
+| PointCloud2 | `/camera/camera/depth/color/points` | Depth cloud |
+| Odometry | `/odom` | VIO trail |
 | TF | (all) | Coordinate frame tree |
-| Map | `/rtabmap/cloud_map` | 3D map building live |
+| Map | `/rtabmap/grid_map` or `/map` | 2D occupancy |
 
 Save your config: **File > Save Config As > `drone_monitor.rviz`**
 
@@ -258,7 +247,7 @@ Next time: `ros2 run rviz2 rviz2 -d ~/drone_monitor.rviz`
 
 ---
 
-## 9. Verify Data Flow
+## 10. Verify Data Flow
 
 Run these from the laptop to confirm streaming:
 
@@ -288,7 +277,7 @@ ros2 topic bw /odom
 
 ---
 
-## 10. Bandwidth Management
+## 11. Bandwidth Management
 
 Raw camera over WiFi can be 30-60 MB/s. If WiFi is slow:
 
@@ -321,7 +310,7 @@ On laptop RViz2, subscribe to `/camera/color/compressed` using the
 
 ---
 
-## 11. QGroundControl (Optional)
+## 12. QGroundControl (Optional)
 
 Forward MAVLink from the Jetson to the laptop for a flight HUD:
 
@@ -336,33 +325,35 @@ Forward MAVLink from the Jetson to the laptop for a flight HUD:
 
 ---
 
-## 12. Troubleshooting
+## 13. Troubleshooting
 
 | Problem | Fix |
 |---------|-----|
 | `ros2 topic list` is empty on laptop | Check: same `ROS_DOMAIN_ID`, `ROS_LOCALHOST_ONLY=0`, same `RMW_IMPLEMENTATION` on both machines |
 | Topics visible but no data | Firewall: `sudo ufw allow in proto udp` or disable ufw temporarily |
 | RealSense not found | `rs-enumerate-devices`; check USB; try `sudo` |
-| RTAB-Map crashes | Verify camera topics first: `ros2 topic hz /camera/color/image_raw` |
+| RTAB-Map crashes | Verify camera topics: `ros2 topic hz /camera/camera/color/image_raw` (or `/camera/color/...` if using `ros_bridge.sh` only) |
 | WiFi drops mid-flight | tmux keeps Jetson processes alive; just SSH back and `tmux attach -t drone` |
 | High latency on RViz2 | Omit `--pointcloud`; throttle camera; use compressed transport |
 | DDS not discovering | Ensure both machines are on the same subnet; try `ros2 multicast receive` |
 
 ---
 
-## 13. Quick Reference Card
+## 14. Quick Reference Card
 
 ```bash
-# === JETSON ===
-ssh jetson@10.42.0.1
+# === JETSON (simple) ===
 cd ~/gNNS_drone
-./scripts/jetson_nano/ros_bridge.sh --imu                          # full mission
-./scripts/jetson_nano/ros_bridge.sh --viz-only --imu --pointcloud  # viz only
-./scripts/jetson_nano/ros_bridge.sh --print-only                   # dry run
+./scripts/jetson_nano/d455_launch.sh      # terminal 1
+./scripts/jetson_nano/rtabmap_vio.sh      # terminal 2
+
+# === JETSON (tmux all-in-one) ===
+./scripts/jetson_nano/ros_bridge.sh --viz-only --imu --pointcloud
 
 # === LAPTOP ===
 cd ~/gNNS_drone
-./scripts/jetson_nano/laptop_rviz2.sh 42                           # RViz2
-ros2 topic list                                                     # verify
-ros2 topic hz /odom                                                 # check rates
+chmod +x scripts/jetson_nano/laptop_rviz2.sh scripts/jetson_nano/verify_bridge.sh
+./scripts/jetson_nano/verify_bridge.sh
+./scripts/jetson_nano/laptop_rviz2.sh 42
+ros2 topic hz /odom
 ```
