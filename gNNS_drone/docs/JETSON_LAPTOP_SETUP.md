@@ -121,11 +121,18 @@ Both machines must agree on these three values. They are set automatically by
 | `ROS_DOMAIN_ID` | `42` | Isolates your topics from other ROS networks |
 | `ROS_LOCALHOST_ONLY` | `0` | Allows cross-machine DDS discovery |
 | `RMW_IMPLEMENTATION` | `rmw_cyclonedds_cpp` | Both machines must use the same DDS vendor |
+| `CYCLONEDDS_URI` | `file://.../config/cyclonedds.xml` (generated) | Set automatically by `ros_bridge.sh` / `laptop_rviz2.sh` via `cyclonedds_env.sh` |
 
 ```bash
 export ROS_DOMAIN_ID=42
 export ROS_LOCALHOST_ONLY=0
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+```
+
+Optional: pin DDS to your WiFi interface if discovery is flaky:
+
+```bash
+export CYCLONE_IFACE=wlan0   # or wlp2s0, enp0s3, etc.
 ```
 
 ---
@@ -168,6 +175,10 @@ cd ~/gNNS_drone
 | `--distro NAME` | ROS distro: `humble`, `jazzy`, etc. |
 | `--mavlink-out IP:PORT` | Forward MAVLink to laptop for QGroundControl |
 | `--session NAME` | tmux session name (default `drone`) |
+| `--cyclone-iface IFACE` | CycloneDDS `NetworkInterface` name (e.g. `wlan0`) |
+| `--light-maps` | Lower RTAB-Map cloud bandwidth (`cloud_decimation 8`) |
+| `--rtabmap-gui` | Enable `rtabmap_viz` on Jetson (default off, saves GPU/CPU) |
+| `--cloud-map` / `--grid-map` | No-op flags (maps publish by default; for script clarity) |
 
 ### tmux layout
 
@@ -189,8 +200,9 @@ cd ~/gNNS_drone
 ./scripts/jetson_nano/laptop_rviz2.sh 42
 ```
 
-The script sources ROS, sets DDS variables, lists available topics from the
-Jetson, and opens RViz2.
+The script sources ROS, sets DDS variables (including `CYCLONEDDS_URI` from
+`config/cyclonedds.xml`), lists available topics from the Jetson, and opens
+RViz2 with [`config/drone_monitor.rviz`](../config/drone_monitor.rviz) when present.
 
 Usage variants:
 
@@ -199,6 +211,17 @@ Usage variants:
 ./laptop_rviz2.sh 42           # explicit domain
 ./laptop_rviz2.sh 42 jazzy     # domain + distro
 ./laptop_rviz2.sh humble       # just distro
+./laptop_rviz2.sh --topics-only           # list topics and exit (quick check)
+./laptop_rviz2.sh 42 --cyclone-iface wlan0
+```
+
+### Verify connectivity: `verify_bridge.sh`
+
+On the laptop (Jetson stack running):
+
+```bash
+./scripts/jetson_nano/verify_bridge.sh
+./scripts/jetson_nano/verify_bridge.sh 42 --no-hz
 ```
 
 ---

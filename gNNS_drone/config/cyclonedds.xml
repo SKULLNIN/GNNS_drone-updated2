@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  CycloneDDS config for gNNS Jetson <-> laptop ROS 2 bridge (shared WiFi).
+
+  The GNNS_CYCLONE_IFACE placeholder element is replaced at runtime by
+  scripts/jetson_nano/cyclonedds_env.sh when CYCLONEDDS_URI is set.
+
+  Optional: export CYCLONE_IFACE=wlan0   (or enp0s3, eth0, etc.) before
+  launching ros_bridge.sh / laptop_rviz2.sh if autodetermine picks the wrong NIC.
+-->
+<CycloneDDS xmlns="https://cyclic.com/eso/cyclonedds/xmlconfig.xsd"
+            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+            xsi:schemaLocation="https://cyclic.com/eso/cyclonedds/xmlconfig.xsd https://cyclic.com/eso/cyclonedds/xmlconfig.xsd">
+  <Domain id="any">
+    <General>
+      <AllowMulticast>true</AllowMulticast>
+      <MulticastTimeToLive>32</MulticastTimeToLive>
+      <Interfaces>
+        <!--GNNS_CYCLONE_IFACE-->
+      </Interfaces>
+    </General>
+    <Internal>
+      <SocketReceiveBufferSize min="4MiB" max="16MiB"/>
+      <SocketSendBufferSize min="4MiB" max="16MiB"/>
+    </Internal>
+  </Domain>
+</CycloneDDS>

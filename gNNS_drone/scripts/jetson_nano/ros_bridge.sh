@@ -12,6 +12,9 @@
 #   ./ros_bridge.sh --viz-only --imu --pointcloud  # everything for RViz2
 #   ./ros_bridge.sh --print-only             # dry run, no ROS needed
 #   ./ros_bridge.sh --no-tmux                # foreground (for systemd)
+#   ./ros_bridge.sh --cyclone-iface wlan0    # pin CycloneDDS to WiFi NIC
+#   ./ros_bridge.sh --light-maps             # lower RTAB-Map cloud bandwidth
+#   ./ros_bridge.sh --rtabmap-gui            # enable rtabmap_viz on Jetson (heavy)
 #
 # On laptop:
 #   ./scripts/jetson_nano/laptop_rviz2.sh 42
@@ -24,7 +27,8 @@ ROS_SETUP="/opt/ros/${ROS_DISTRO_DEFAULT}/setup.bash"
 OVERLAY_SETUP=""
 DOMAIN_ID="${ROS_DOMAIN_ID:-42}"
 RMW="${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}"
-LOCALHOST="${ROS_LOCALHOST_ONLY:-0}"
+# Multi-machine DDS: never use localhost-only for the bridge (ignore prior env).
+LOCALHOST="0"
 ODOM_SOURCE="ros2"
 TMUX_SESSION="drone"
 USE_TMUX=1
@@ -33,10 +37,16 @@ VIZ_ONLY=0
 POINTCLOUD=0
 IMU=0
 MAVLINK_OUT=""
+RTABMAP_GUI_VAL="false"
+RTAB_LIGHT_MAPS=0
 
 MISSION_ARGS=()
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+# shellcheck source=cyclonedds_env.sh
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/cyclonedds_env.sh"
 
 # Optional workspace overlay
 for overlay in "$HOME/ros2_ws/install/setup.bash" \
@@ -70,11 +80,18 @@ while [[ $# -gt 0 ]]; do
         --viz-only)      VIZ_ONLY=1; shift ;;
         --pointcloud)    POINTCLOUD=1; shift ;;
         --imu)           IMU=1; shift ;;
+        --cyclone-iface) require_arg "$1" "${2:-}"; export CYCLONE_IFACE="$2"; shift 2 ;;
+        --cloud-map)     shift ;;  # RTAB-Map publishes cloud/grid by default; for documentation
+        --grid-map)      shift ;;
+        --light-maps)    RTAB_LIGHT_MAPS=1; shift ;;
+        --rtabmap-gui)   RTABMAP_GUI_VAL="true"; shift ;;
         --)              shift; MISSION_ARGS+=("$@"); break ;;
         -*)              echo "[Error] Unknown flag: $1" >&2; exit 2 ;;
         *)               MISSION_ARGS+=("$1"); shift ;;
     esac
 done
+
+gnns_set_cyclonedds_uri
 
 # Export DDS variables
 export ROS_DOMAIN_ID="$DOMAIN_ID"
@@ -92,6 +109,17 @@ fi
 # Command generators (each prints a bash snippet for a tmux pane)
 # ================================================================
 
+dds_env_snippet() {
+    local quri
+    quri="$(printf '%q' "${CYCLONEDDS_URI:-}")"
+    cat <<EOF
+export ROS_DOMAIN_ID="$DOMAIN_ID"
+export ROS_LOCALHOST_ONLY="$LOCALHOST"
+export RMW_IMPLEMENTATION="$RMW"
+export CYCLONEDDS_URI=$quri
+EOF
+}
+
 realsense_cmd() {
     local args="enable_color:=true enable_depth:=true"
     args+=" enable_infra1:=false enable_infra2:=false"
@@ -101,20 +129,17 @@ realsense_cmd() {
     cat <<EOF
 source "$ROS_SETUP"
 ${OVERLAY_SETUP:+source "$OVERLAY_SETUP"}
-export ROS_DOMAIN_ID="$DOMAIN_ID"
-export ROS_LOCALHOST_ONLY="$LOCALHOST"
-export RMW_IMPLEMENTATION="$RMW"
+$(dds_env_snippet)
 ros2 launch realsense2_camera rs_launch.py $args
 EOF
 }
 
 rtabmap_cmd() {
-    cat <<EOF
+    if [[ "$RTAB_LIGHT_MAPS" == "1" ]]; then
+        cat <<EOF
 source "$ROS_SETUP"
 ${OVERLAY_SETUP:+source "$OVERLAY_SETUP"}
-export ROS_DOMAIN_ID="$DOMAIN_ID"
-export ROS_LOCALHOST_ONLY="$LOCALHOST"
-export RMW_IMPLEMENTATION="$RMW"
+$(dds_env_snippet)
 ros2 launch rtabmap_ros rtabmap.launch.py \\
   rgb_topic:=/camera/color/image_raw \\
   depth_topic:=/camera/depth/image_rect_raw \\
@@ -122,8 +147,34 @@ ros2 launch rtabmap_ros rtabmap.launch.py \\
   frame_id:=camera_link \\
   approx_sync:=true \\
   odom_frame_id:=odom \\
-  visual_odometry:=true
+  visual_odometry:=true \\
+  odom_topic:=/odom \\
+  map_topic:=/map \\
+  publish_tf_map:=true \\
+  publish_tf_odom:=true \\
+  rtabmap_viz:=${RTABMAP_GUI_VAL} \\
+  rtabmap_args:='cloud_decimation 8'
 EOF
+    else
+        cat <<EOF
+source "$ROS_SETUP"
+${OVERLAY_SETUP:+source "$OVERLAY_SETUP"}
+$(dds_env_snippet)
+ros2 launch rtabmap_ros rtabmap.launch.py \\
+  rgb_topic:=/camera/color/image_raw \\
+  depth_topic:=/camera/depth/image_rect_raw \\
+  camera_info_topic:=/camera/color/camera_info \\
+  frame_id:=camera_link \\
+  approx_sync:=true \\
+  odom_frame_id:=odom \\
+  visual_odometry:=true \\
+  odom_topic:=/odom \\
+  map_topic:=/map \\
+  publish_tf_map:=true \\
+  publish_tf_odom:=true \\
+  rtabmap_viz:=${RTABMAP_GUI_VAL}
+EOF
+    fi
 }
 
 orbslam3_cmd() {
@@ -143,9 +194,7 @@ mission_cmd() {
     cat <<EOF
 source "$ROS_SETUP"
 ${OVERLAY_SETUP:+source "$OVERLAY_SETUP"}
-export ROS_DOMAIN_ID="$DOMAIN_ID"
-export ROS_LOCALHOST_ONLY="$LOCALHOST"
-export RMW_IMPLEMENTATION="$RMW"
+$(dds_env_snippet)
 cd "$PROJECT_ROOT"
 python3 -m gnns_drone --vio-source "$ODOM_SOURCE" $mission_args_str
 EOF
@@ -253,6 +302,7 @@ echo "  ┌───────────────────────
 echo "  │  tmux session: $TMUX_SESSION            │"
 echo "  │  ROS_DOMAIN_ID=$DOMAIN_ID               │"
 echo "  │  RMW=$RMW                               │"
+echo "  │  CYCLONEDDS_URI set                     │"
 echo "  │  Attach: tmux attach -t $TMUX_SESSION   │"
 echo "  │                                         │"
 echo "  │  On laptop:                             │"

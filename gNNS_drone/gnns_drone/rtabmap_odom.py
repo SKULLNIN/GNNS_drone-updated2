@@ -368,6 +368,9 @@ class RTABMapOdom:
             rclpy.init()
         node = rclpy.create_node('gnns_odom_subscriber')
 
+        odom_topic = self.config.get("odom_topic", "/odom")
+        info_topic = self.config.get("rtabmap_info_topic", "/rtabmap/info")
+
         try:
             def odom_callback(msg: Odometry):
                 """Process odometry from RTAB-Map."""
@@ -414,13 +417,13 @@ class RTABMapOdom:
                     logger.error(f"info_callback error: {e}")
 
             node.create_subscription(
-                Odometry, '/odom', odom_callback, qos_profile_sensor_data
+                Odometry, odom_topic, odom_callback, qos_profile_sensor_data
             )
             node.create_subscription(
-                Info, '/rtabmap/info', info_callback, qos_profile_sensor_data
+                Info, info_topic, info_callback, qos_profile_sensor_data
             )
 
-            logger.info("Subscribed to /odom and /rtabmap/info")
+            logger.info("Subscribed to %s and %s", odom_topic, info_topic)
 
             while self._running:
                 rclpy.spin_once(node, timeout_sec=0.1)
