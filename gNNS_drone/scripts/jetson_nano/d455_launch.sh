@@ -20,14 +20,13 @@ fi
 
 # shellcheck source=/dev/null
 source "$SETUP"
-if [[ -f "$HOME/ros2_ws/install/setup.bash" ]]; then
-    # shellcheck source=/dev/null
-    source "$HOME/ros2_ws/install/setup.bash"
-fi
 
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-42}"
 export ROS_LOCALHOST_ONLY="${ROS_LOCALHOST_ONLY:-0}"
 export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}"
+
+# shellcheck source=/dev/null
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fastdds_wifi_env.sh"
 
 exec ros2 launch realsense2_camera rs_launch.py \
   enable_gyro:=true \

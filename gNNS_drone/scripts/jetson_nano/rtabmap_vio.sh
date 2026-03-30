@@ -7,6 +7,11 @@
 #
 # Usage:
 #   ./scripts/jetson_nano/rtabmap_vio.sh
+#
+# Stale or corrupt ~/.ros/rtabmap.db causes VWDictionary "Not found word ... (dict size=0)".
+# By default we pass --delete_db_on_start (fresh map each run).
+#   export RTABMAP_KEEP_DB=1   # reuse existing database / map
+#   export RTABMAP_ARGS="--udebug"   # optional extra rtabmap CLI args (appended)
 # ================================================================
 # Do not use set -u — ROS setup.bash references unset variables.
 set -eo pipefail
@@ -20,14 +25,27 @@ fi
 
 # shellcheck source=/dev/null
 source "$SETUP"
-if [[ -f "$HOME/ros2_ws/install/setup.bash" ]]; then
-    # shellcheck source=/dev/null
-    source "$HOME/ros2_ws/install/setup.bash"
-fi
 
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-42}"
 export ROS_LOCALHOST_ONLY="${ROS_LOCALHOST_ONLY:-0}"
 export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}"
+
+# shellcheck source=/dev/null
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fastdds_wifi_env.sh"
+
+RTAB_RARGS=""
+if [[ "${RTABMAP_KEEP_DB:-0}" != "1" ]]; then
+    RTAB_RARGS="--delete_db_on_start"
+fi
+if [[ -n "${RTABMAP_ARGS:-}" ]]; then
+    RTAB_RARGS="${RTAB_RARGS:+$RTAB_RARGS }${RTABMAP_ARGS}"
+fi
+
+EXTRA=()
+if [[ -n "$RTAB_RARGS" ]]; then
+    # ros2 launch expects e.g. rtabmap_args:='--delete_db_on_start --udebug'
+    EXTRA=( "rtabmap_args:='${RTAB_RARGS}'" )
+fi
 
 exec ros2 launch rtabmap_launch rtabmap.launch.py \
   visual_odometry:=true \
@@ -44,4 +62,5 @@ exec ros2 launch rtabmap_launch rtabmap.launch.py \
   publish_tf_odom:=true \
   odom_topic:=/odom \
   map_topic:=/map \
-  rtabmap_viz:=false
+  rtabmap_viz:=false \
+  "${EXTRA[@]}"

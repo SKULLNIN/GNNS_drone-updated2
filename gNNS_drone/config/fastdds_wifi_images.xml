@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <!--
+    Fast DDS defaults for WiFi + large sensor_msgs/Image (RealSense over DDS).
+    Use on both publisher (Jetson) and subscriber (laptop) via:
+      export FASTRTPS_DEFAULT_PROFILES_FILE=/path/to/gNNS_drone/config/fastdds_wifi_images.xml
+    Pair with Linux sysctl hints in docs/JETSON_LAPTOP_SETUP.md if images still stall.
+  -->
+  <participant profile_name="default_participant_profile" is_default_profile="true">
+    <rtps>
+      <builtin>
+        <readerHistoryMemoryPolicy>PREALLOCATED_WITH_REALLOC</readerHistoryMemoryPolicy>
+        <writerHistoryMemoryPolicy>PREALLOCATED_WITH_REALLOC</writerHistoryMemoryPolicy>
+      </builtin>
+    </rtps>
+  </participant>
+</profiles>

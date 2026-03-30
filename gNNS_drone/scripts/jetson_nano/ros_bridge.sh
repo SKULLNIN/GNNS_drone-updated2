@@ -90,6 +90,8 @@ done
 export ROS_DOMAIN_ID="$DOMAIN_ID"
 export ROS_LOCALHOST_ONLY="$LOCALHOST"
 export RMW_IMPLEMENTATION="$RMW"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/fastdds_wifi_env.sh"
 
 # ---- Verify ROS setup file exists ----
 if [[ "$PRINT_ONLY" != "1" && ! -f "$ROS_SETUP" ]]; then

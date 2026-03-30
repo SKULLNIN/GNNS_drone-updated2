@@ -334,6 +334,7 @@ Forward MAVLink from the Jetson to the laptop for a flight HUD:
 | RealSense not found | `rs-enumerate-devices`; check USB; try `sudo` |
 | RTAB-Map crashes | Verify camera topics: `ros2 topic hz /camera/camera/color/image_raw` (or `/camera/color/...` if using `ros_bridge.sh` only) |
 | WiFi drops mid-flight | tmux keeps Jetson processes alive; just SSH back and `tmux attach -t drone` |
+| RViz shows no image / no odom but `ros2 topic list` works | Run `./scripts/jetson_nano/verify_bridge.sh` — if `ros2 topic hz` on the image topic is **0 Hz**, DDS is not delivering frames (WiFi UDP). Use **`config/fastdds_wifi_images.xml`** (scripts source it via `fastdds_wifi_env.sh` on Jetson + laptop). On Linux try: `sudo sysctl -w net.ipv4.ipfrag_time=3` and `sudo sysctl -w net.ipv4.ipfrag_high_thresh=134217728` ([ROS 2 DDS tuning](https://docs.ros.org/en/humble/How-To-Guides/DDS-tuning.html)). In RViz, set **Camera → Image Topic** to a topic from `ros2 topic list` (often `/camera/camera/color/image_raw`; try **`image_rect_color`** if needed). Image QoS must stay **Best Effort** (RealSense). Use `RQT_IMAGE=1 ./scripts/jetson_nano/laptop_rviz2.sh` or `rqt_image_view` to cross-check. |
 | High latency on RViz2 | Omit `--pointcloud`; throttle camera; use compressed transport |
 | DDS not discovering | Ensure both machines are on the same subnet; try `ros2 multicast receive` |
 

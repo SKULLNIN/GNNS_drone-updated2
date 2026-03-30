@@ -23,6 +23,8 @@ export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}"
 
 # shellcheck source=/dev/null
 source "$SETUP"
+# shellcheck source=/dev/null
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fastdds_wifi_env.sh"
 
 echo ""
 echo "=== gNNS bridge check | ROS_DOMAIN_ID=$ROS_DOMAIN_ID | RMW=$RMW_IMPLEMENTATION ==="
@@ -35,9 +37,22 @@ echo "--- /odom rate (5s max) ---"
 timeout 5s ros2 topic hz /odom 2>/dev/null | head -5 || echo "[WARN] /odom not seen or not publishing"
 echo ""
 
-echo "--- camera RGB (namespaced /camera/camera/...) ---"
-timeout 5s ros2 topic hz /camera/camera/color/image_raw 2>/dev/null | head -5 || \
-  timeout 5s ros2 topic hz /camera/color/image_raw 2>/dev/null | head -5 || \
-  echo "[WARN] camera color topic not seen"
+echo "--- camera RGB rate (8s max; needs messages on this machine) ---"
+_IMG=""
+if ros2 topic list 2>/dev/null | grep -qx '/camera/camera/color/image_raw'; then
+    _IMG=/camera/camera/color/image_raw
+elif ros2 topic list 2>/dev/null | grep -qx '/camera/camera/color/image_rect_color'; then
+    _IMG=/camera/camera/color/image_rect_color
+elif ros2 topic list 2>/dev/null | grep -qx '/camera/color/image_raw'; then
+    _IMG=/camera/color/image_raw
+fi
+if [[ -n "$_IMG" ]]; then
+    echo "Topic: $_IMG"
+    ros2 topic info "$_IMG" -v 2>/dev/null | head -25 || true
+    echo ""
+    timeout 8s ros2 topic hz "$_IMG" 2>/dev/null | head -8 || echo "[WARN] no samples (WiFi/DDS/QoS/firewall?)"
+else
+    echo "[WARN] no common color image topic in ros2 topic list"
+fi
 echo ""
 echo "Done."
