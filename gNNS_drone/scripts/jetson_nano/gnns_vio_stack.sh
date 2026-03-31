@@ -190,6 +190,18 @@ RTABMAP_ARGS_RECOVERY="--delete_db_on_start
 
 # Built when launching RTAB-Map (see build_rtab_rargs)
 RTAB_RARGS=""
+# Same preset but without Odom/* and OdoF2M/* — the rtabmap SLAM node does not declare those
+# ROS2 parameters; passing them in rtabmap_args crashes with ParameterNotDeclaredException.
+RTAB_SLAM_RARGS=""
+
+# Remove odometry-node-only CLI flags (rgbd_odometry accepts them; rtabmap slam does not).
+strip_rtabargs_for_slam_node() {
+  local s="$1"
+  # Each flag is "--Name value" with a single-token value (true/false/numbers).
+  s=$(echo "$s" | sed -E 's/--Odom\/[^ ]+ [^ ]+//g')
+  s=$(echo "$s" | sed -E 's/--OdoF2M\/[^ ]+ [^ ]+//g')
+  echo "$s" | tr -s ' ' | sed 's/^ *//;s/ *$//'
+}
 
 build_rtab_rargs() {
   local preset="${GNNS_RTABMAP_PRESET:-recovery}"
@@ -215,6 +227,7 @@ build_rtab_rargs() {
   if [[ -n "${RTABMAP_EXTRA_ARGS:-}" ]]; then
     RTAB_RARGS="${RTAB_RARGS} ${RTABMAP_EXTRA_ARGS}"
   fi
+  RTAB_SLAM_RARGS="$(strip_rtabargs_for_slam_node "${RTAB_RARGS}")"
 }
 
 # Common RealSense launch arguments (IMU required — fixes "bad optional access")
@@ -265,6 +278,21 @@ launch_realsense() {
 launch_realsense_bg() {
   ros2 launch realsense2_camera rs_launch.py "${RS_LAUNCH_ARGS[@]}" >>"${RS_LOG}" 2>&1 &
   echo $!
+}
+
+# Kill a PID and any children (ros2 launch leaves component nodes as children)
+kill_process_tree() {
+  local root="$1"
+  [[ -z "$root" ]] || ! [[ "$root" =~ ^[0-9]+$ ]] && return 0
+  local c
+  for c in $(pgrep -P "$root" 2>/dev/null || true); do
+    kill_process_tree "$c"
+  done
+  if kill -0 "$root" 2>/dev/null; then
+    kill -TERM "$root" 2>/dev/null || true
+    sleep 0.3
+    kill -KILL "$root" 2>/dev/null || true
+  fi
 }
 
 # -----------------------------------------------------------------------------
@@ -328,7 +356,7 @@ launch_rtabmap_slam() {
     publish_tf_odom:=false \
     odom_topic:=${ODOM_TOPIC} \
     rtabmap_viz:=${RTABMAP_VIZ} \
-    rtabmap_args:="${RTAB_RARGS}" 2>&1 | tee -a "${RT_LOG}"
+    rtabmap_args:="${RTAB_SLAM_RARGS}" 2>&1 | tee -a "${RT_LOG}"
 }
 
 # -----------------------------------------------------------------------------
@@ -351,8 +379,7 @@ launch_rtabmap_with_odom() {
 
   cleanup_odom() {
     echo "[gnns_vio_stack] Stopping rgbd_odometry (PID=${ODOM_PID})…"
-    kill "${ODOM_PID}" 2>/dev/null || true
-    wait "${ODOM_PID}" 2>/dev/null || true
+    kill_process_tree "${ODOM_PID}"
   }
   trap cleanup_odom EXIT INT TERM
 
@@ -392,11 +419,9 @@ launch_stack() {
   cleanup() {
     echo "[gnns_vio_stack] Shutting down…"
     if [[ -n "${ODOM_PID}" ]] && [[ "$ODOM_PID" =~ ^[0-9]+$ ]]; then
-      kill "${ODOM_PID}" 2>/dev/null || true
-      wait "${ODOM_PID}" 2>/dev/null || true
+      kill_process_tree "${ODOM_PID}"
     fi
-    kill "${RS_PID}" 2>/dev/null || true
-    wait "${RS_PID}" 2>/dev/null || true
+    kill_process_tree "${RS_PID}"
   }
   trap cleanup EXIT INT TERM
 
