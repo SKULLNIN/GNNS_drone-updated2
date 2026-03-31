@@ -21,7 +21,7 @@ ros2_odom:
 
 vio:
   # Camera type: "t265" or "d435i"
-  camera_type: "t265"
+  camera_type: "d435i"
   
   # RealSense T265 settings
   t265:
@@ -63,12 +63,12 @@ vio:
   position_filter:
     enable: true
     type: "low_pass"              # "low_pass" or "kalman"
-    cutoff_hz: 15                 # Low-pass cutoff frequency
+    cutoff_hz: 20                 # Low-pass cutoff frequency
     
   # Health monitoring
   health:
     watchdog_timeout_s: 0.5       # If no VIO frame for 0.5s → sensor error
-    fps_warning_threshold: 15     # Warn if FPS drops below this
+    fps_warning_threshold: 25     # Warn if FPS drops below this
     covariance_warning: 0.5       # Warn if position covariance exceeds (meters)
 
 # ============================================================
