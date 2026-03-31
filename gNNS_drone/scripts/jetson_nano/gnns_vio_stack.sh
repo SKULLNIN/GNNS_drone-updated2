@@ -22,6 +22,11 @@
 #        ALL stdout from `ros2 launch` → wrong PID / broken behavior.
 #      • Fix: redirect RealSense logs to a file; echo only the numeric PID.
 #
+#  (3) invalid rgbd_odometry PID (preset text + PID in one string)
+#      • Bug: ODOM_PID="$(launch_rgbd_odometry_bg)" captured ALL stdout, including
+#        build_rtab_rargs / echo lines, not just the PID.
+#      • Fix: launch_rgbd_odometry_bg sets GNNS_RGBD_ODOM_PID=$!; callers use that.
+#
 # Usage (from repo root that contains gnns_drone/ and config/):
 #
 #   chmod +x scripts/jetson_nano/gnns_vio_stack.sh
@@ -80,6 +85,8 @@ mkdir -p "$LOG_DIR"
 RS_LOG="${LOG_DIR}/gnns_realsense.log"
 RT_LOG="${LOG_DIR}/gnns_rtabmap.log"
 ODOM_LOG="${LOG_DIR}/gnns_rgbd_odometry.log"
+# Set only by launch_rgbd_odometry_bg — read ODOM_PID from this; do not capture the function with $(...).
+GNNS_RGBD_ODOM_PID=""
 
 # RGB/depth sync window (seconds). Tighter (e.g. 0.2) if timestamps drift at 15 Hz.
 APPROX_SYNC_MAX="${GNNS_APPROX_SYNC_MAX:-0.5}"
@@ -190,11 +197,11 @@ build_rtab_rargs() {
   case "$preset" in
     default)
       base="$RTABMAP_ARGS_DEFAULT"
-      echo "[gnns_vio_stack] RTAB-Map preset: default (F2M, FAST, MinInliers 15)"
+      echo "[gnns_vio_stack] RTAB-Map preset: default (F2M, FAST, MinInliers 15)" >&2
       ;;
     recovery)
       base="$RTABMAP_ARGS_RECOVERY"
-      echo "[gnns_vio_stack] RTAB-Map preset: recovery (F2F, ORB, MinInliers 8)"
+      echo "[gnns_vio_stack] RTAB-Map preset: recovery (F2F, ORB, MinInliers 8)" >&2
       ;;
     *)
       echo "[gnns_vio_stack] ERROR: unknown GNNS_RTABMAP_PRESET='${preset}' (use: default|recovery)" >&2
@@ -270,9 +277,9 @@ launch_rgbd_odometry_bg() {
   local odom_rargs="${RTAB_RARGS}"
   odom_rargs="${odom_rargs//--delete_db_on_start/}"
   odom_rargs="$(echo "${odom_rargs}" | tr -s ' ' | sed 's/^ *//;s/ *$//')"
-  echo "[gnns_vio_stack] Launching rgbd_odometry (rtabmap_odom)…"
-  echo "  Log: ${ODOM_LOG}"
-  echo "  → ${ODOM_TOPIC}  (wait_imu_to_init=false on VO node)"
+  echo "[gnns_vio_stack] Launching rgbd_odometry (rtabmap_odom)…" >&2
+  echo "  Log: ${ODOM_LOG}" >&2
+  echo "  → ${ODOM_TOPIC}  (wait_imu_to_init=false on VO node)" >&2
   # shellcheck disable=SC2086
   ros2 run rtabmap_odom rgbd_odometry ${odom_rargs} \
     --ros-args \
@@ -291,7 +298,7 @@ launch_rgbd_odometry_bg() {
     -r imu:=${IMU_TOPIC} \
     -r odom:=${ODOM_TOPIC} \
     >>"${ODOM_LOG}" 2>&1 &
-  echo $!
+  GNNS_RGBD_ODOM_PID=$!
 }
 
 # -----------------------------------------------------------------------------
@@ -335,7 +342,8 @@ launch_rtabmap_with_odom() {
   : >"${ODOM_LOG}"
   : >"${RT_LOG}"
 
-  ODOM_PID="$(launch_rgbd_odometry_bg)"
+  launch_rgbd_odometry_bg
+  ODOM_PID="${GNNS_RGBD_ODOM_PID}"
   if ! [[ "$ODOM_PID" =~ ^[0-9]+$ ]]; then
     echo "[gnns_vio_stack] ERROR: invalid rgbd_odometry PID '${ODOM_PID}' — check ${ODOM_LOG}" >&2
     exit 1
@@ -404,7 +412,8 @@ launch_stack() {
     }
   fi
 
-  ODOM_PID="$(launch_rgbd_odometry_bg)"
+  launch_rgbd_odometry_bg
+  ODOM_PID="${GNNS_RGBD_ODOM_PID}"
   if ! [[ "$ODOM_PID" =~ ^[0-9]+$ ]]; then
     echo "[gnns_vio_stack] ERROR: invalid rgbd_odometry PID '${ODOM_PID}' — check ${ODOM_LOG}" >&2
     exit 1
