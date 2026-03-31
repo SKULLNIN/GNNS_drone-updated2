@@ -288,17 +288,15 @@ wait_for_topic() {
 # Without this, rtabmap sees "two unconnected trees" while /odom topic may still publish.
 # -----------------------------------------------------------------------------
 wait_for_tf_odom_camera_link() {
-  local timeout="${1:-90}"
-  local elapsed=0
-  echo "[gnns_vio_stack] Waiting for TF ${ODOM_FRAME_FOR_TF} -> ${CAMERA_FRAME_FOR_TF} (up to ${timeout}s)…"
-  while [[ "$elapsed" -lt "$timeout" ]]; do
-    if timeout 3 ros2 run tf2_ros tf2_echo "${ODOM_FRAME_FOR_TF}" "${CAMERA_FRAME_FOR_TF}" -r 20 2>&1 | head -15 | grep -qE 'Translation|At time'; then
-      echo "[gnns_vio_stack] OK: TF ${ODOM_FRAME_FOR_TF} -> ${CAMERA_FRAME_FOR_TF} (same tree as rgbd_odometry)."
-      return 0
-    fi
-    sleep 1
-    elapsed=$((elapsed + 1))
-  done
+  local max_wait="${1:-90}"
+  echo "[gnns_vio_stack] Waiting for TF ${ODOM_FRAME_FOR_TF} -> ${CAMERA_FRAME_FOR_TF} (up to ${max_wait}s)…"
+  # Do NOT use head -N: tf2_echo may print many lines before the first "Translation".
+  # grep -m 1 stops at the first match (same pattern you see when tf2_echo works manually).
+  if PARENT="${ODOM_FRAME_FOR_TF}" CHILD="${CAMERA_FRAME_FOR_TF}" \
+    timeout "${max_wait}" bash -c 'ros2 run tf2_ros tf2_echo "$PARENT" "$CHILD" -r 10 2>&1 | grep -m 1 -q Translation'; then
+    echo "[gnns_vio_stack] OK: TF ${ODOM_FRAME_FOR_TF} -> ${CAMERA_FRAME_FOR_TF} (same tree as rgbd_odometry)."
+    return 0
+  fi
   echo "[gnns_vio_stack] ERROR: TF ${ODOM_FRAME_FOR_TF} -> ${CAMERA_FRAME_FOR_TF} never connected (two TF trees)." >&2
   echo "  rgbd_odometry must publish odom→camera_link (publish_tf=true). Check: ${ODOM_LOG}" >&2
   echo "  Run: ros2 run tf2_tools view_frames   # or: ros2 run tf2_ros tf2_echo odom camera_link" >&2
