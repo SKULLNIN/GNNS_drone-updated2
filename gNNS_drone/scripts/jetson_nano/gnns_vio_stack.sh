@@ -44,7 +44,9 @@
 #                        Set 0 or 1 explicitly to override (SSH: export GNNS_RTABMAP_VIZ=0).
 #   GNNS_LOG_DIR=/tmp        # RealSense + RTAB-Map logs
 #   GNNS_ODOM_TOPIC=/odom    # rgbd_odometry output + rtabmap input (default /odom)
-#   GNNS_WAIT_FOR_TRANSFORM=1.0   # rtabmap TF wait (default; raise if extrapolation warnings persist)
+#   GNNS_WAIT_FOR_TRANSFORM=2.0   # rtabmap TF wait (seconds; larger tolerates stamp skew)
+#   GNNS_RTABMAP_NAMESPACE=rtabmap  # must match ros2 launch namespace (for param hooks)
+#   GNNS_RTABMAP_VIZ_SUBSCRIBE_ODOM=1  # set rtabmap_viz subscribe_odom=true (uses /odom vs TF stamp; reduces viz errors)
 #   GNNS_ODOM_FRAME / GNNS_CAMERA_FRAME — must match rgbd_odometry TF (default odom / camera_link)
 #
 #   GNNS_RTABMAP_PRESET=default|recovery|accurate
@@ -52,8 +54,10 @@
 #         uses Frame-to-Frame odometry, lower MinInliers, ORB features (see below)
 #       accurate — F2M + GFTT, particle filter, tighter grid (CPU heavier; best map quality)
 #   GNNS_RS_FPS — default 30 (was 15); aligns with config/vio_config.yaml d435i color/depth_fps
-#   GNNS_APPROX_SYNC_MAX — default 0.04 s (tight sync window; was 0.5)
-#   GNNS_QUEUE_SIZE — default 5 for rgbd_odometry + rtabmap sync queues (was 20)
+#   GNNS_APPROX_SYNC_MAX — default 0.10 s (motion/jitter tolerant; use 0.04 only if CPU keeps up)
+#   GNNS_QUEUE_SIZE — default 10 for rgbd_odometry + rtabmap (balance lag vs starvation under motion)
+#   If you see "extrapolation into the future" odom→camera_link: VO/TF stalled (lost track or CPU).
+#     Try: GNNS_RTABMAP_PRESET=default (F2M), GNNS_RTABMAP_VIZ=0, GNNS_RS_FPS=15, or looser sync/queue above.
 #   GNNS_USE_RGBD_SYNC=0|1 — opt-in: run rtabmap_sync/rgbd_sync before odom (single fused rgbd stream)
 #   GNNS_RGBD_TOPIC — output topic when GNNS_USE_RGBD_SYNC=1 (default /gnns_rgbd_image)
 #
@@ -99,13 +103,14 @@ GNNS_RGBD_ODOM_PID=""
 # Set only by launch_rgbd_sync_bg when GNNS_USE_RGBD_SYNC=1
 GNNS_RGBD_SYNC_PID=""
 
-# RGB/depth sync window (seconds). ~one frame at 25 Hz; keeps latency low at 30 Hz camera.
-APPROX_SYNC_MAX="${GNNS_APPROX_SYNC_MAX:-0.04}"
-# Per-topic and sync queue depth (smaller = less buffering lag)
-QUEUE_SIZE="${GNNS_QUEUE_SIZE:-5}"
-# TF lookup tolerance for rtabmap (seconds). Increase if you see "extrapolation into the future"
-# for odom→camera_link (often when odom TF updates slower than images).
-WAIT_FOR_TRANSFORM="${GNNS_WAIT_FOR_TRANSFORM:-1.0}"
+# RGB/depth sync window (seconds). Too tight → dropped pairs under motion → VO stalls → TF freezes vs images.
+APPROX_SYNC_MAX="${GNNS_APPROX_SYNC_MAX:-0.10}"
+# Per-topic and sync queue depth (too small → starvation; too large → lag)
+QUEUE_SIZE="${GNNS_QUEUE_SIZE:-10}"
+# TF lookup tolerance for rtabmap (seconds). Helps minor stamp skew; does not fix multi‑second TF stalls.
+WAIT_FOR_TRANSFORM="${GNNS_WAIT_FOR_TRANSFORM:-2.0}"
+# RTAB-Map launch namespace (must match ros2 launch rtabmap.launch.py)
+RTABMAP_NS="${GNNS_RTABMAP_NAMESPACE:-rtabmap}"
 
 # -----------------------------------------------------------------------------
 # Topic layout — matches RealSense: camera_name:=camera camera_namespace:=camera
@@ -261,7 +266,8 @@ strip_rtabargs_for_slam_node() {
 }
 
 build_rtab_rargs() {
-  local preset="${GNNS_RTABMAP_PRESET:-recovery}"
+  # default = F2M (more stable when moving); use recovery if bootstrap fails in poor conditions
+  local preset="${GNNS_RTABMAP_PRESET:-default}"
   local base
   case "$preset" in
     default)
@@ -463,18 +469,43 @@ launch_rgbd_odometry_bg() {
 }
 
 # -----------------------------------------------------------------------------
+# rtabmap_viz: upstream launch omits subscribe_odom; set via param when node appears.
+# Uses /odom topic instead of TF-at-image-stamp (mitigates TF extrapolation spam when VO lags).
+# -----------------------------------------------------------------------------
+enable_rtabmap_viz_subscribe_odom_bg() {
+  [[ "${RTABMAP_VIZ}" != "true" ]] && return 0
+  [[ "${GNNS_RTABMAP_VIZ_SUBSCRIBE_ODOM:-1}" != "1" ]] && return 0
+  (
+    local i=0
+    local max=120
+    while [[ "$i" -lt "$max" ]]; do
+      if ros2 node list 2>/dev/null | grep -qF "/${RTABMAP_NS}/rtabmap_viz"; then
+        if ros2 param set "/${RTABMAP_NS}/rtabmap_viz" subscribe_odom true 2>/dev/null; then
+          echo "[gnns_vio_stack] Set /${RTABMAP_NS}/rtabmap_viz subscribe_odom=true" >&2
+        fi
+        exit 0
+      fi
+      sleep 0.25
+      i=$((i + 1))
+    done
+  ) &
+}
+
+# -----------------------------------------------------------------------------
 # RTAB-Map SLAM only (external odometry — no rgbd_odometry in this launch)
 # -----------------------------------------------------------------------------
 launch_rtabmap_slam() {
   build_rtab_rargs
+  enable_rtabmap_viz_subscribe_odom_bg
   echo "[gnns_vio_stack] Launching RTAB-Map SLAM (visual_odometry:=false, uses ${ODOM_TOPIC})…"
   echo "  Log: ${RT_LOG}"
   echo "  rgb=${RGB_TOPIC} depth=${DEPTH_TOPIC} imu=${IMU_TOPIC}"
   echo "  wait_imu_to_init=${WAIT_IMU_INIT}  rtabmap_viz=${RTABMAP_VIZ}"
-  echo "  odom_sensor_sync=true  wait_for_transform=${WAIT_FOR_TRANSFORM}s  qos_odom=Reliable"
+  echo "  odom_sensor_sync=true  wait_for_transform=${WAIT_FOR_TRANSFORM}s  qos_odom=Reliable  namespace=${RTABMAP_NS}"
   if [[ "${GNNS_USE_RGBD_SYNC}" == "1" ]]; then
     # shellcheck disable=SC2086
     ros2 launch rtabmap_launch rtabmap.launch.py \
+      namespace:=${RTABMAP_NS} \
       rgb_topic:="${RGB_TOPIC}" \
       depth_topic:="${DEPTH_TOPIC}" \
       camera_info_topic:="${INFO_TOPIC}" \
@@ -501,6 +532,7 @@ launch_rtabmap_slam() {
   else
     # shellcheck disable=SC2086
     ros2 launch rtabmap_launch rtabmap.launch.py \
+      namespace:=${RTABMAP_NS} \
       rgb_topic:="${RGB_TOPIC}" \
       depth_topic:="${DEPTH_TOPIC}" \
       camera_info_topic:="${INFO_TOPIC}" \
