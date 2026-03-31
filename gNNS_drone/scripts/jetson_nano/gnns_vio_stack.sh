@@ -43,6 +43,7 @@
 #   GNNS_RTABMAP_VIZ=0       # default — no GUI (SSH safe). Set 1 for desktop
 #   GNNS_LOG_DIR=/tmp        # RealSense + RTAB-Map logs
 #   GNNS_ODOM_TOPIC=/odom    # rgbd_odometry output + rtabmap input (default /odom)
+#   GNNS_WAIT_FOR_TRANSFORM=0.5   # rtabmap TF wait (raise if odom→camera_link extrapolation warnings)
 #
 #   GNNS_RTABMAP_PRESET=default|recovery
 #       recovery — if you see "Not enough inliers 0/20" and odom quality=0:
@@ -90,6 +91,9 @@ GNNS_RGBD_ODOM_PID=""
 
 # RGB/depth sync window (seconds). Tighter (e.g. 0.2) if timestamps drift at 15 Hz.
 APPROX_SYNC_MAX="${GNNS_APPROX_SYNC_MAX:-0.5}"
+# TF lookup tolerance for rtabmap (seconds). Increase if you see "extrapolation into the future"
+# for odom→camera_link (often when odom TF updates slower than images).
+WAIT_FOR_TRANSFORM="${GNNS_WAIT_FOR_TRANSFORM:-0.5}"
 
 # -----------------------------------------------------------------------------
 # Topic layout — matches RealSense: camera_name:=camera camera_namespace:=camera
@@ -338,6 +342,7 @@ launch_rtabmap_slam() {
   echo "  Log: ${RT_LOG}"
   echo "  rgb=${RGB_TOPIC} depth=${DEPTH_TOPIC} imu=${IMU_TOPIC}"
   echo "  wait_imu_to_init=${WAIT_IMU_INIT}  rtabmap_viz=${RTABMAP_VIZ}"
+  echo "  odom_sensor_sync=true  wait_for_transform=${WAIT_FOR_TRANSFORM}s  qos_odom=Reliable"
   # shellcheck disable=SC2086
   ros2 launch rtabmap_launch rtabmap.launch.py \
     rgb_topic:="${RGB_TOPIC}" \
@@ -355,6 +360,9 @@ launch_rtabmap_slam() {
     publish_tf_map:=true \
     publish_tf_odom:=false \
     odom_topic:=${ODOM_TOPIC} \
+    odom_sensor_sync:=true \
+    wait_for_transform:=${WAIT_FOR_TRANSFORM} \
+    qos_odom:=1 \
     rtabmap_viz:=${RTABMAP_VIZ} \
     rtabmap_args:="${RTAB_SLAM_RARGS}" 2>&1 | tee -a "${RT_LOG}"
 }

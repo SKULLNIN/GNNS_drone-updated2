@@ -273,3 +273,28 @@ ros2 run rqt_image_view rqt_image_view
 ```
 
 If problems persist, temporarily use **depth** `image_rect_raw` **with** `depth/camera_info` (not aligned) only if you match RTAB-Map topics consistently — the usual fix is **aligned depth + color camera_info** as in `gnns_vio_stack.sh`.
+
+---
+
+## Troubleshooting: TF "extrapolation into the future" (no point cloud in RViz)
+
+Symptoms:
+
+- `getTransform() ... Lookup would require extrapolation into the future` for `odom` → `camera_link`
+- **Requested time** on the image is **much newer** than **latest data** on the TF buffer for that transform
+- RViz shows **no map dots** / empty cloud even though camera images work
+
+**What it means:** RGB-D frames are timestamped **ahead of** the newest `odom`→`camera_link` TF. Usually **rgbd_odometry stopped updating TF** (lost track, `quality=0` for a long time), or **odometry is much slower** than the camera stream.
+
+**Checks:**
+
+1. **Odometry still running:** `ros2 topic hz /odom` — should be close to camera rate when VO is healthy.
+2. **Odometry log:** `tail -f /tmp/gnns_rgbd_odometry.log` — look for `registration failed`, `quality=0`.
+3. **Same ROS time:** On Jetson only, `use_sim_time` should be **false** everywhere unless you use simulation.
+
+**Script tweaks (`gnns_vio_stack.sh`):**
+
+- `odom_sensor_sync:=true` and `qos_odom:=1` for the SLAM node (already set in current script) to align odometry with sensors.
+- **Increase TF wait:** `export GNNS_WAIT_FOR_TRANSFORM=0.5` (default) or try `1.0` if warnings persist.
+
+**If the gap is tens of seconds (e.g. 200 s):** the fix is not only TF tolerance — **restart rgbd_odometry** or improve scene/lighting so VO tracks again; stale TF means the odometry pipeline is not publishing fresh transforms.
