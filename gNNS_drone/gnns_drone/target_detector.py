@@ -353,17 +353,63 @@ class TargetDetector:
     # CIRCLE DETECTION (for circular landing pads / helipads)
     # ==============================================================
 
+    @staticmethod
+    def _median_depth_disk(depth_frame, cx: int, cy: int, radius_px: int = 5) -> float:
+        """Robust range (m) from median of valid depth samples in a disk (single-pixel depth is noisy)."""
+        vals = []
+        for dy in range(-radius_px, radius_px + 1):
+            for dx in range(-radius_px, radius_px + 1):
+                if dx * dx + dy * dy > radius_px * radius_px:
+                    continue
+                d = depth_frame.get_distance(cx + dx, cy + dy)
+                if 0.15 < d < 50.0:
+                    vals.append(d)
+        if not vals:
+            return -1.0
+        return float(np.median(vals))
+
+    @staticmethod
+    def _refine_circle_center(gray, cx: int, cy: int, r: int) -> Tuple[int, int, int]:
+        """Subpixel-ish refinement: centroid of largest contour in Otsu ROI around Hough estimate."""
+        import cv2
+
+        h, w = gray.shape
+        pad = max(12, r // 4)
+        x0, y0 = max(0, cx - r - pad), max(0, cy - r - pad)
+        x1, y1 = min(w, cx + r + pad), min(h, cy + r + pad)
+        roi = gray[y0:y1, x0:x1]
+        if roi.size < 400:
+            return cx, cy, r
+        blur = cv2.GaussianBlur(roi, (5, 5), 0)
+        _, th = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        contours, _ = cv2.findContours(th, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return cx, cy, r
+        cnt = max(contours, key=cv2.contourArea)
+        if cv2.contourArea(cnt) < 50:
+            return cx, cy, r
+        m = cv2.moments(cnt)
+        if m["m00"] < 1e-6:
+            return cx, cy, r
+        rx = int(m["m10"] / m["m00"]) + x0
+        ry = int(m["m01"] / m["m00"]) + y0
+        _, rad = cv2.minEnclosingCircle(cnt)
+        rad_i = int(round(rad))
+        if rad_i < 8 or rad_i > 400:
+            return cx, cy, r
+        return rx, ry, rad_i
+
     def _detect_circle(self, color_img, depth_frame) -> TargetDetection:
-        """Detect circular landing target using Hough circles."""
+        """Detect circular landing target using Hough circles + contour refinement + median depth."""
         import cv2
 
         det = TargetDetection(timestamp=time.time())
         gray = cv2.cvtColor(color_img, cv2.COLOR_BGR2GRAY)
-        gray = cv2.GaussianBlur(gray, (9, 9), 2)
+        gray = cv2.GaussianBlur(gray, (7, 7), 1.5)
 
         circles = cv2.HoughCircles(
-            gray, cv2.HOUGH_GRADIENT, dp=1.2, minDist=50,
-            param1=100, param2=50, minRadius=20, maxRadius=200
+            gray, cv2.HOUGH_GRADIENT, dp=1.1, minDist=45,
+            param1=120, param2=38, minRadius=15, maxRadius=220
         )
 
         if circles is None:
@@ -373,13 +419,13 @@ class TargetDetector:
         # Pick the most centered / largest circle
         best = None
         best_score = -1
-        img_cx, img_cy = color_img.shape[1]//2, color_img.shape[0]//2
+        img_cx, img_cy = color_img.shape[1] // 2, color_img.shape[0] // 2
 
         for c in circles[0]:
             x, y, r = int(c[0]), int(c[1]), int(c[2])
             # Score: bigger and more centered = better
-            dist_center = math.sqrt((x - img_cx)**2 + (y - img_cy)**2)
-            score = r - dist_center * 0.5
+            dist_center = math.sqrt((x - img_cx) ** 2 + (y - img_cy) ** 2)
+            score = r - dist_center * 0.45
             if score > best_score:
                 best_score = score
                 best = (x, y, r)
@@ -389,7 +435,8 @@ class TargetDetector:
             return det
 
         cx, cy, radius = best
-        depth_m = depth_frame.get_distance(cx, cy)
+        cx, cy, radius = self._refine_circle_center(gray, cx, cy, radius)
+        depth_m = self._median_depth_disk(depth_frame, cx, cy, radius_px=max(4, min(10, radius // 4)))
         if depth_m <= 0 or depth_m > 10:
             det.detected = False
             return det

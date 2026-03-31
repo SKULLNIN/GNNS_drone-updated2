@@ -277,7 +277,41 @@ ros2 topic bw /odom
 
 ---
 
-## 11. Bandwidth Management
+## 11. GPU / CUDA (RTAB-Map) and CPU load
+
+**`apt install ros-*-rtabmap-*` binaries do not use your NVIDIA GPU.** They link against **CPU OpenCV**. There is no environment variable in `gnns_vio_stack.sh` or ROS that “moves RTAB-Map to CUDA.” The RealSense ROS driver also does most work on the **CPU** in typical setups.
+
+### If you need RTAB-Map on the GPU (real CUDA offload)
+
+You must **build from source** against **OpenCV built with CUDA**, then build **librtabmap** and **rtabmap_ros** against that OpenCV. Versions must match end-to-end or you get link/runtime failures. Start from upstream:
+
+- [introlab/rtabmap](https://github.com/introlab/rtabmap) — core library (CMake CUDA options when OpenCV CUDA is available).
+- [introlab/rtabmap_ros](https://github.com/introlab/rtabmap_ros) (branch matching your ROS 2 distro).
+- Community context: [ROS Answers — GPU features of RTAB-Map](https://answers.ros.org/question/400254/how-to-enable-gpu-features-of-rtabmap/), [GitHub — building with CUDA](https://github.com/introlab/rtabmap_ros/issues/1090).
+
+**Jetson:** Prefer JetPack’s toolchain; align OpenCV/RTAB-Map with what NVIDIA documents for your L4T version. Expect a multi-hour build and careful dependency isolation (often a dedicated workspace or container).
+
+**Laptop (NVIDIA):** Install a CUDA toolkit matching your driver; same story: CUDA-enabled OpenCV first, then RTAB-Map.
+
+After a successful CUDA build, GPU use is via RTAB-Map’s **feature/detector settings** that map to OpenCV CUDA modules (see app preferences / parameters in upstream docs), not via this repo’s shell script alone.
+
+### Reduce CPU load *without* a GPU build (recommended first)
+
+These keep work on the CPU but **lower how much** CPU is used:
+
+| Lever | Example |
+|-------|--------|
+| Camera FPS / resolution | `GNNS_RS_FPS=15` (default); raise to 30 on Jetson only if `ros2 topic hz /odom` stays stable |
+| VO publish cap | `GNNS_ODOM_MAX_RATE` matches FPS (see `gnns_vio_stack.sh`) |
+| No GUI on robot | `GNNS_RTABMAP_VIZ=0` — **rtabmap_viz is heavy** |
+| Loop closure rate | Default `--Rtabmap/DetectionRate 2`; optional `GNNS_RTABMAP_DETECTION_RATE` — lower = less CPU |
+| Jetson power | `sudo nvpmodel -m 0` (or max performance mode), `sudo jetson_clocks` where appropriate |
+
+**Python gNNS VIO** (`vio_algorithm.py`) uses NumPy and CPU OpenCV unless you **change the code** to call `cv2.cuda` or similar. That is a separate development effort.
+
+---
+
+## 12. Bandwidth Management
 
 Raw camera over WiFi can be 30-60 MB/s. If WiFi is slow:
 
@@ -310,7 +344,7 @@ On laptop RViz2, subscribe to `/camera/color/compressed` using the
 
 ---
 
-## 12. QGroundControl (Optional)
+## 13. QGroundControl (Optional)
 
 Forward MAVLink from the Jetson to the laptop for a flight HUD:
 
@@ -325,7 +359,7 @@ Forward MAVLink from the Jetson to the laptop for a flight HUD:
 
 ---
 
-## 13. Troubleshooting
+## 14. Troubleshooting
 
 | Problem | Fix |
 |---------|-----|
@@ -340,7 +374,7 @@ Forward MAVLink from the Jetson to the laptop for a flight HUD:
 
 ---
 
-## 14. Quick Reference Card
+## 15. Quick Reference Card
 
 ```bash
 # === JETSON (simple) ===
