@@ -2,6 +2,9 @@
 
 Run the mission directly on the Jetson Nano with minimal setup.
 
+**Full RTAB-Map + RealSense guide (steps, commands, env vars, logs):**  
+[docs/RTABMAP_JETSON_README.md](../../docs/RTABMAP_JETSON_README.md)
+
 ## Jetson + laptop (D455 + RTAB-Map + RViz)
 
 Simple two-process flow (see `docs/JETSON_LAPTOP_SETUP.md`):

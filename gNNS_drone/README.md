@@ -40,7 +40,7 @@ chmod +x scripts/jetson_nano/run_mission.sh
 ./scripts/jetson_nano/run_mission.sh          # Full mission (enter GPS)
 ./scripts/jetson_nano/run_mission.sh --demo   # Demo waypoints
 ```
-See [scripts/jetson_nano/README.md](scripts/jetson_nano/README.md) for setup and options.
+See [scripts/jetson_nano/README.md](scripts/jetson_nano/README.md) for setup and options. For **RTAB-Map + RealSense** on Jetson, see [docs/RTABMAP_JETSON_README.md](docs/RTABMAP_JETSON_README.md).
 
 ## ROS2 VIO Stack (RealSense + ORB-SLAM3 + RTAB-Map)
 
@@ -82,7 +82,8 @@ gNNS_drone/
 
 | Guide | Description |
 |-------|-------------|
-| [Jetson-to-Laptop Setup](docs/JETSON_LAPTOP_SETUP.md) | Network, SSH, DDS, `ros_bridge.sh`, `laptop_rviz2.sh`, RViz2 displays, bandwidth, troubleshooting |
+| [RTAB-Map Jetson stack](docs/RTABMAP_JETSON_README.md) | **RealSense + `gnns_vio_stack.sh`**: prerequisites, modes, env vars, logs, verification, links |
+| [Jetson-to-Laptop Setup](docs/JETSON_LAPTOP_SETUP.md) | Network, SSH, DDS, `ros_bridge.sh`, `laptop_rviz2.sh`, RViz2 displays, bandwidth, GPU/CPU, troubleshooting |
 | [Full Mission Guide](docs/MISSION_GUIDE.md) | Hardware overview, FC parameters, config files, VIO bringup, running the mission, web control, safety, pre-flight checklist |
 | [SITL Simulation Guide](docs/SITL_GUIDE.md) | ArduPilot SITL setup, test scripts, Gazebo, connection details, troubleshooting |
 | [ROS2 VIO Setup](docs/ROS2_VIO_SETUP.md) | RealSense + ORB-SLAM3 / RTAB-Map bring-up order, calibration, EKF tuning |
