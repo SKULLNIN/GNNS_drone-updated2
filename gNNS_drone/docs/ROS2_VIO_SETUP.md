@@ -164,3 +164,43 @@ How much the EKF trusts external nav (VIO) vs. IMU.
 ### EK3_EXTNAV_DELAY
 
 Matches `VISO_DELAY_MS` (in milliseconds). Keep them aligned.
+
+---
+
+## Troubleshooting: IMU / "bad optional access"
+
+If you see crashes or logs mentioning **optional access** / **IMU** while using RealSense + RTAB-Map:
+
+1. **Enable IMU in the RealSense node** — a launch that only sets `enable_color`, `enable_depth`, and `align_depth` does **not** publish gyro/accel. RTAB-Map (or the driver) may then access IMU data that was never enabled.
+
+   ```bash
+   ros2 launch realsense2_camera rs_launch.py \
+     align_depth.enable:=true \
+     enable_color:=true \
+     enable_depth:=true \
+     enable_gyro:=true \
+     enable_accel:=true \
+     unite_imu_method:=2
+   ```
+
+   `unite_imu_method:=2` publishes a single fused `sensor_msgs/Imu` (typically `.../imu`) at a stable rate.
+
+2. **Verify the topic** before starting RTAB-Map:
+
+   ```bash
+   ros2 topic hz /camera/camera/imu
+   ros2 topic echo /camera/camera/imu --once
+   ```
+
+   Adjust the path to match your `camera_name` / `camera_namespace`.
+
+3. **If you intentionally run visual odometry only** (no IMU fusion), disable IMU wait in RTAB-Map:
+
+   ```bash
+   export GNNS_WAIT_IMU=0
+   # In launch: wait_imu_to_init:=false
+   ```
+
+   The project script `scripts/jetson_nano/gnns_vio_stack.sh` documents `GNNS_WAIT_IMU`.
+
+4. **Firmware / USB** — intermittent IMU can still cause edge-case errors; use a powered USB3 hub, short cable, and current RealSense firmware.

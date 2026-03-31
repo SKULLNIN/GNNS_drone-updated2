@@ -5,16 +5,25 @@ Visual Inertial Odometry position tracking using Intel RealSense.
 
 Supports:
   - RealSense T265 (direct pose output)
-  - RealSense D435i (depth + IMU, requires external VIO pipeline)
+  - RealSense D435i / D455 (depth + IMU → VIOAlgorithm pipeline)
   - Simulated mode (for testing without hardware)
 
 Sends position to FC via MAVLink VISION_POSITION_ESTIMATE.
+
+D435i / D455 pipeline (NEW):
+  RealSense streams (color @ 30 Hz, depth @ 30 Hz, accel/gyro @ 200 Hz)
+    → IMU samples buffered in deque
+    → VIOAlgorithm.process_frame(color, depth, imu_samples)
+    → VIOState (full rich output)
+    → mapped back to VIOPose for backward compatibility
+    → get_full_state() returns the complete VIOState
 """
 
 import time
 import math
 import threading
 import logging
+from collections import deque
 from enum import IntEnum
 from dataclasses import dataclass, field
 from typing import Optional
@@ -171,6 +180,17 @@ class VIOTracker:
         if self._thread:
             self._thread.join(timeout=3.0)
         logger.info("VIO tracker stopped")
+
+    def get_full_state(self):
+        """
+        Return the latest rich VIOState from the D435i/D455 pipeline.
+
+        Returns None when running in T265 or simulated mode (those modes
+        do not produce a VIOState; use get_pose() instead).
+        """
+        if hasattr(self, "_vio_state"):
+            return self._vio_state
+        return None
 
     def _set_status(self, new_status: VIOStatus):
         """Update status and fire callbacks."""
@@ -336,29 +356,217 @@ class VIOTracker:
         logger.info("T265 pipeline stopped")
 
     # ==============================================================
-    # D435i (placeholder — needs ORB-SLAM3 or RTAB-Map)
+    # D435i / D455  →  VIOAlgorithm pipeline
     # ==============================================================
 
     def _run_d435i(self):
         """
-        D435i VIO loop.
-        
-        NOTE: The D435i doesn't provide direct pose output like T265.
-        You need an external VIO pipeline like:
-          - ORB-SLAM3
-          - RTAB-Map
-          - VINS-Mono
-          - Kimera-VIO
-          
-        For now, this falls back to simulated mode.
-        TODO: Integrate with your chosen VIO pipeline.
+        D435i / D455 VIO loop using the custom VIOAlgorithm pipeline.
+
+        Pipeline:
+          1. Configure RealSense color (30 Hz), depth (30 Hz), accel+gyro (200 Hz).
+          2. IMU samples are buffered in a deque; drained per camera frame.
+          3. VIOAlgorithm.process_frame() returns a full VIOState each frame.
+          4. VIOState is mapped to VIOPose for backward compat.
+          5. get_full_state() exposes the complete VIOState.
         """
-        logger.warning(
-            "D435i VIO not yet implemented! Needs ORB-SLAM3 or RTAB-Map.\n"
-            "Falling back to simulated mode for now.\n"
-            "TODO: Integrate ROS2 RTAB-Map node → subscribe to /odom topic"
-        )
-        self._run_simulated()
+        self._set_status(VIOStatus.INITIALIZING)
+        self._vio_state = None  # Will hold the latest VIOState
+
+        # ---- Import dependencies ----------------------------------------
+        try:
+            import pyrealsense2 as rs
+        except ImportError:
+            logger.error(
+                "pyrealsense2 not installed! pip install pyrealsense2\n"
+                "Falling back to simulated mode."
+            )
+            self._run_simulated()
+            return
+
+        try:
+            from .vio_algorithm import VIOAlgorithm
+        except ImportError as e:
+            logger.error(f"VIOAlgorithm import failed: {e}\n"
+                         "Falling back to simulated mode.")
+            self._run_simulated()
+            return
+
+        # ---- Initialise VIOAlgorithm ----------------------------------------
+        detector_method = self.config.get("detector_method", "fast9")
+        algo_config     = self.config.get("vio_algorithm",   {})
+        algo = VIOAlgorithm(detector_method=detector_method, config=algo_config)
+        algo.start()
+
+        # IMU sample deque (thread-safe via GIL for simple appends)
+        imu_deque: deque = deque(maxlen=500)
+
+        # ---- Configure RealSense pipeline -----------------------------------
+        try:
+            pipe = rs.pipeline()
+            cfg  = rs.config()
+
+            # Color stream (used for feature detection)
+            cfg.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+            # Depth stream aligned to color
+            cfg.enable_stream(rs.stream.depth, 640, 480, rs.format.z16,  30)
+            # IMU streams
+            cfg.enable_stream(rs.stream.accel, rs.format.motion_xyz32f, 200)
+            cfg.enable_stream(rs.stream.gyro,  rs.format.motion_xyz32f, 200)
+
+            profile = pipe.start(cfg)
+            device  = profile.get_device()
+            logger.info(f"D455/D435i connected: {device.get_info(rs.camera_info.name)}")
+            logger.info(f"  Serial: {device.get_info(rs.camera_info.serial_number)}")
+
+            # Read depth scale
+            depth_sensor  = device.first_depth_sensor()
+            depth_scale   = depth_sensor.get_depth_scale()
+
+            # Read color intrinsics for the algorithm
+            color_stream  = profile.get_stream(rs.stream.color)
+            color_intr    = color_stream.as_video_stream_profile().get_intrinsics()
+            algo.update_camera_intrinsics(
+                color_intr.fx, color_intr.fy,
+                color_intr.ppx, color_intr.ppy,
+                depth_scale,
+            )
+
+            # Align depth to color
+            align = rs.align(rs.stream.color)
+
+        except Exception as e:
+            logger.error(f"D455/D435i init failed: {e}")
+            self._set_status(VIOStatus.LOST)
+            algo.stop()
+            return
+
+        self._set_status(VIOStatus.INITIALIZING)
+        fps_counter = 0
+        fps_timer   = time.time()
+        prev_pos    = (0.0, 0.0, 0.0)
+
+        # ---- Main frame loop ------------------------------------------------
+        while self._running:
+            try:
+                frames = pipe.wait_for_frames(timeout_ms=1000)
+            except Exception as e:
+                logger.warning(f"D455 wait_for_frames timeout: {e}")
+                self._stats.frames_dropped += 1
+                continue
+
+            try:
+                # ---- Collect IMU frames (motion frames) --------------------
+                for frame in frames:
+                    if frame.is_motion_frame():
+                        mf   = frame.as_motion_frame()
+                        data = mf.get_motion_data()
+                        t    = mf.get_timestamp() / 1000.0  # ms → s
+
+                        if mf.get_profile().stream_type() == rs.stream.accel:
+                            # Store temporarily; merge with next gyro
+                            imu_deque.append(
+                                (data.x, data.y, data.z, None, None, None, t)
+                            )
+                        elif mf.get_profile().stream_type() == rs.stream.gyro:
+                            # Find the most recent accel entry and merge
+                            merged = False
+                            for i in range(len(imu_deque) - 1, -1, -1):
+                                entry = imu_deque[i]
+                                if entry[3] is None:  # accel entry
+                                    imu_deque[i] = (
+                                        entry[0], entry[1], entry[2],
+                                        data.x, data.y, data.z, t
+                                    )
+                                    merged = True
+                                    break
+                            if not merged:
+                                # No pending accel; push zeros for accel
+                                imu_deque.append(
+                                    (0.0, 0.0, 0.0, data.x, data.y, data.z, t)
+                                )
+
+                # ---- Get aligned color+depth frame -------------------------
+                aligned = align.process(frames)
+                color_frame = aligned.get_color_frame()
+                depth_frame = aligned.get_depth_frame()
+
+                if not color_frame:
+                    self._stats.frames_dropped += 1
+                    continue
+
+                # Convert to numpy
+                import numpy as np
+                color_img = np.asanyarray(color_frame.get_data())
+                depth_img = np.asanyarray(depth_frame.get_data()) if depth_frame else None
+
+                # Drain IMU deque: only use complete (accel+gyro) samples
+                imu_samples = []
+                while imu_deque:
+                    entry = imu_deque.popleft()
+                    if entry[3] is not None:   # has gyro data
+                        imu_samples.append(entry)
+
+                # ---- Run VIO pipeline -------------------------------------
+                vio_state = algo.process_frame(color_img, depth_img, imu_samples)
+                self._vio_state = vio_state
+
+                # ---- Map VIOState → VIOPose (backward compat) ------------
+                with self._pose_lock:
+                    self._pose.timestamp  = vio_state.timestamp
+                    self._pose.x          = vio_state.north
+                    self._pose.y          = vio_state.east
+                    self._pose.z          = vio_state.down
+                    self._pose.vx         = vio_state.vn
+                    self._pose.vy         = vio_state.ve
+                    self._pose.vz         = vio_state.vd
+                    self._pose.roll       = vio_state.roll
+                    self._pose.pitch      = vio_state.pitch
+                    self._pose.yaw        = vio_state.yaw
+                    self._pose.confidence = int(vio_state.confidence)
+                    self._pose.features   = vio_state.num_features_tracked
+                    self._pose.covariance = vio_state.pos_cov_scalar
+
+                self._stats.frames_processed += 1
+                fps_counter += 1
+
+                # ---- Update stats ----------------------------------------
+                north, east, down = vio_state.north, vio_state.east, vio_state.down
+                dist = math.sqrt(
+                    (north - prev_pos[0]) ** 2 +
+                    (east  - prev_pos[1]) ** 2 +
+                    (down  - prev_pos[2]) ** 2
+                )
+                self._stats.total_distance += dist
+                prev_pos = (north, east, down)
+
+                speed = vio_state.speed_3d
+                self._stats.max_velocity_seen = max(
+                    self._stats.max_velocity_seen, speed
+                )
+                self._stats.last_pose = self.get_pose()
+
+                # ---- Update VIO status -----------------------------------
+                self._set_status(vio_state.state)
+
+                # ---- FPS ------------------------------------------------
+                if time.time() - fps_timer >= 1.0:
+                    self._stats.current_fps = fps_counter
+                    fps_counter = 0
+                    fps_timer   = time.time()
+
+            except Exception as e:
+                logger.error(f"D455 frame processing error: {e}")
+                self._stats.frames_dropped += 1
+                time.sleep(0.01)
+
+        # ---- Cleanup -------------------------------------------------------
+        try:
+            pipe.stop()
+        except Exception:
+            pass
+        algo.stop()
+        logger.info("D455/D435i VIO pipeline stopped")
 
     # ==============================================================
     # SIMULATED MODE (for testing)

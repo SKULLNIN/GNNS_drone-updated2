@@ -839,6 +839,60 @@ class MAVLinkBridge:
         )
         self.stats.messages_sent += 1
 
+    def send_optical_flow_rad(self,
+                               flow_x: float, flow_y: float,
+                               quality: int,
+                               alt: float,
+                               integration_time_us: int = 33333,
+                               gyro_x: float = 0.0,
+                               gyro_y: float = 0.0,
+                               gyro_z: float = float("nan"),
+                               sensor_id: int = 0) -> None:
+        """
+        Send a MAVLink OPTICAL_FLOW_RAD message to ArduPilot.
+
+        This lets ArduPilot EKF3 fuse raw optical flow as a second
+        velocity source alongside VISION_POSITION_ESTIMATE.
+
+        ArduPilot param to enable:
+          FLOW_TYPE = 5  (MAVLink)
+          EK3_SRC1_VELXY = 5  (OpticalFlow)
+
+        Args:
+            flow_x:              Body-frame integrated X flow (rad, forward +).
+            flow_y:              Body-frame integrated Y flow (rad, right +).
+            quality:             Flow quality 0–255 (255 = best).
+            alt:                 Ground distance / height above ground (metres).
+            integration_time_us: Time over which flow was integrated (µs).
+                                 Default 33 333 µs ≈ 30 Hz.
+            gyro_x:              Body-frame X gyro rate (rad/s).
+            gyro_y:              Body-frame Y gyro rate (rad/s).
+            gyro_z:              Body-frame Z gyro rate (rad/s), NaN = unknown.
+            sensor_id:           Sensor ID (0 = first sensor).
+        """
+        if not _is_finite(flow_x, flow_y, alt):
+            return
+        if quality < 0 or quality > 255:
+            quality = max(0, min(255, quality))
+
+        time_us = int(time.time() * 1e6) & 0xFFFFFFFF
+
+        self._conn().mav.optical_flow_rad_send(
+            time_us,                  # time_usec
+            sensor_id,                # sensor_id
+            integration_time_us,      # integration_time_us
+            flow_x,                   # integrated_x  (rad)
+            flow_y,                   # integrated_y  (rad)
+            gyro_x * (integration_time_us * 1e-6),  # integrated gyro_x
+            gyro_y * (integration_time_us * 1e-6),  # integrated gyro_y
+            gyro_z * (integration_time_us * 1e-6) if _is_finite(gyro_z) else float("nan"),
+            0,                        # temperature (unknown)
+            quality,                  # quality
+            0,                        # time_delta_distance_us
+            alt,                      # distance (m)
+        )
+        self.stats.messages_sent += 1
+
     def request_all_streams(self, rate_hz: int = 10):
         """
         Request all data streams at given rate.

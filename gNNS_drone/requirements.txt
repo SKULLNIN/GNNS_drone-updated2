@@ -3,4 +3,5 @@ pyrealsense2>=2.50.0
 pyyaml>=6.0
 numpy>=1.21.0
 rplidar-roboticia>=0.9.5
-opencv-python>=4.5.0
+opencv-contrib-python>=4.5.0
+scipy>=1.7.0

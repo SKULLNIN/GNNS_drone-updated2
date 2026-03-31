@@ -153,31 +153,70 @@
   <messages>
     <!-- ============================================================ -->
     <!-- MSG 50001: VIO STATUS — sent from Jetson → FC at 10 Hz      -->
-    <!-- Reports VIO tracker health and confidence                    -->
+    <!-- Reports VIO tracker health, confidence and full pipeline     -->
+    <!-- diagnostics (extended with VIOAlgorithm output fields).     -->
     <!-- ============================================================ -->
     <message id="50001" name="GNNS_VIO_STATUS_MSG">
       <description>
-        VIO tracker status and health report. Sent from companion computer 
+        VIO tracker status and health report. Sent from companion computer
         to flight controller at 10 Hz. The FC uses this to determine whether
         the external position data is trustworthy.
+
+        Extended fields (added for VIOAlgorithm pipeline):
+          imu_dt, num_features_tracked, tracking_ratio,
+          flow_vx, flow_vy, flow_quality, lidar_alt, processing_time_ms.
       </description>
+
+      <!-- ── Core identity ─────────────────────────────────────── -->
       <field type="uint64_t" name="timestamp_us">Timestamp in microseconds since system boot.</field>
-      <field type="uint8_t" name="tracker_status" enum="GNNS_VIO_STATUS">Current VIO tracker status.</field>
-      <field type="uint8_t" name="tracking_confidence">Tracking confidence 0-100 percent. Below 50 triggers degraded state.</field>
-      <field type="uint16_t" name="feature_count">Number of visual features currently being tracked.</field>
-      <field type="float" name="position_x">Current VIO position X (North) in meters from start.</field>
-      <field type="float" name="position_y">Current VIO position Y (East) in meters from start.</field>
-      <field type="float" name="position_z">Current VIO position Z (Down) in meters from start.</field>
-      <field type="float" name="velocity_x">Current velocity X (North) in m/s.</field>
-      <field type="float" name="velocity_y">Current velocity Y (East) in m/s.</field>
-      <field type="float" name="velocity_z">Current velocity Z (Down) in m/s.</field>
-      <field type="float" name="roll">Roll angle in radians.</field>
-      <field type="float" name="pitch">Pitch angle in radians.</field>
-      <field type="float" name="yaw">Yaw angle in radians.</field>
-      <field type="float" name="position_covariance">Position uncertainty estimate in meters (1-sigma).</field>
-      <field type="float" name="angular_covariance">Angular uncertainty estimate in radians (1-sigma).</field>
-      <field type="uint32_t" name="frame_count">Total frames processed since VIO start (for debugging drops).</field>
-      <field type="float" name="fps">Current VIO processing rate in frames per second.</field>
+      <field type="uint8_t"  name="tracker_status" enum="GNNS_VIO_STATUS">Current VIO tracker status.</field>
+      <field type="uint8_t"  name="tracking_confidence">Composite tracking confidence 0–100 %. Below 40 triggers DEGRADED state.</field>
+
+      <!-- ── Position and velocity (NED, metres / m/s) ─────────── -->
+      <field type="float" name="position_x">VIO position North (metres from start).</field>
+      <field type="float" name="position_y">VIO position East (metres from start).</field>
+      <field type="float" name="position_z">VIO position Down (metres from start, positive down).</field>
+      <field type="float" name="velocity_x">Velocity North (m/s).</field>
+      <field type="float" name="velocity_y">Velocity East (m/s).</field>
+      <field type="float" name="velocity_z">Velocity Down (m/s, positive = descending).</field>
+
+      <!-- ── Attitude ───────────────────────────────────────────── -->
+      <field type="float" name="roll">Roll angle (radians). Positive = right wing down.</field>
+      <field type="float" name="pitch">Pitch angle (radians). Positive = nose up.</field>
+      <field type="float" name="yaw">Yaw angle (radians). 0 = North, pi/2 = East.</field>
+
+      <!-- ── Uncertainty ────────────────────────────────────────── -->
+      <field type="float" name="position_covariance">EKF position uncertainty (metres, 1-sigma, mean of NED diagonal).</field>
+      <field type="float" name="angular_covariance">EKF attitude uncertainty (radians, 1-sigma, mean of RPY diagonal).</field>
+
+      <!-- ── Feature tracking quality ──────────────────────────── -->
+      <field type="uint16_t" name="feature_count">Number of visual features detected in this frame.</field>
+      <field type="uint16_t" name="num_features_tracked">Number of features successfully tracked from previous frame (post-LK).</field>
+      <field type="uint16_t" name="num_inliers">Geometrically consistent inliers after RANSAC fundamental-matrix check.</field>
+      <field type="float"    name="tracking_ratio">Ratio of inliers to tracked features (0–1). Below 0.5 indicates large motion.</field>
+      <field type="float"    name="mean_flow_magnitude">Mean optical-flow displacement across all tracked features (pixels/frame).</field>
+
+      <!-- ── IMU integration diagnostics ───────────────────────── -->
+      <field type="float"   name="imu_dt">IMU pre-integration interval (seconds). Nominal ~0.033 s at 30 Hz. Spikes indicate dropout.</field>
+      <field type="uint8_t" name="imu_sample_count">Number of IMU samples integrated for this frame (nominal 6–7 at 200/30 Hz).</field>
+
+      <!-- ── Optical flow (PX4Flow-style output) ───────────────── -->
+      <field type="float"   name="flow_vx">Body-frame X velocity estimate from optical flow (m/s, forward +).</field>
+      <field type="float"   name="flow_vy">Body-frame Y velocity estimate from optical flow (m/s, right +).</field>
+      <field type="uint8_t" name="flow_quality">Optical-flow quality 0–255 (255 = best). 0 = flow not available.</field>
+
+      <!-- ── Range sensors ──────────────────────────────────────── -->
+      <field type="float" name="lidar_alt">Nadir LiDAR altitude above ground (metres). -1 if unavailable.</field>
+      <field type="float" name="depth_range_m">Nearest valid depth reading from D455 depth map (metres). -1 if unavailable.</field>
+
+      <!-- ── RTABMap / loop closure ─────────────────────────────── -->
+      <field type="int32_t"  name="loop_closure_id">RTABMap loop-closure node ID. -1 if no closure this frame.</field>
+      <field type="uint16_t" name="map_nodes">Total nodes in the RTABMap graph (0 if RTABMap not running).</field>
+
+      <!-- ── Processing diagnostics ────────────────────────────── -->
+      <field type="float"    name="processing_time_ms">Wall-clock time to produce this VIO state (ms). Nominal &lt;15 ms on Jetson Orin.</field>
+      <field type="uint32_t" name="frame_count">Total frames processed since VIO start.</field>
+      <field type="float"    name="fps">Current VIO processing rate (frames per second).</field>
     </message>
 
     <!-- ============================================================ -->

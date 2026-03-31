@@ -205,16 +205,20 @@ class RTABMapOdom:
         bridge.send_vision_speed(data.vx, data.vy, data.vz)
     """
 
-    def __init__(self, mode: str = "ros2", config: Optional[dict] = None):
+    def __init__(self, mode: str = "ros2", config: Optional[dict] = None,
+                 voxl_client=None):
         """
         Args:
-            mode: "ros2" — subscribe to RTAB-Map ROS2 node's /odom topic
-                  "standalone" — use RTAB-Map Python bindings (no ROS)
-                  "t265_raw" — use T265 raw tracking (fallback)
+            mode: "ros2"      — subscribe to RTAB-Map ROS2 node's /odom topic
+                  "voxl"      — read from VoxlRTABMapClient (ModalAI VOXL board)
+                  "t265_raw"  — use T265 raw tracking (fallback)
                   "simulated" — simulated odometry for testing
+                  "sitl"      — read position from ArduPilot SITL via MAVLink
+            voxl_client: pre-constructed VoxlRTABMapClient instance (voxl mode).
         """
         self.mode = mode
         self.config = config or {}
+        self._voxl_client = voxl_client  # used in "voxl" mode
         
         self._odom = OdomData()
         self._odom_lock = threading.Lock()
@@ -268,6 +272,8 @@ class RTABMapOdom:
             self._thread = threading.Thread(target=self._run_simulated, daemon=True)
         elif self.mode == "sitl":
             self._thread = threading.Thread(target=self._run_sitl, daemon=True)
+        elif self.mode == "voxl":
+            self._thread = threading.Thread(target=self._run_voxl, daemon=True)
         else:
             raise ValueError(f"Unknown mode: {self.mode}")
         self._thread.start()
@@ -552,6 +558,78 @@ class RTABMapOdom:
             
             time.sleep(1.0 / 50)  # 50 Hz for tight PID control
 
+    # ==============================================================
+    # VOXL MODE — Read pose from VoxlRTABMapClient
+    # ==============================================================
+
+    def _run_voxl(self):
+        """
+        Read odometry from a VoxlRTABMapClient instance.
+
+        The VoxlRTABMapClient runs its own background thread; here we
+        poll its get_pose() at 30 Hz and feed into _update_odom().
+
+        Loop-closure callbacks from the VOXL client are forwarded to
+        this object's registered on_loop_closure callbacks.
+        """
+        if self._voxl_client is None:
+            logger.error("VOXL mode requires a VoxlRTABMapClient instance; "
+                         "falling back to simulated")
+            self._run_simulated()
+            return
+
+        client = self._voxl_client
+
+        # Start the VOXL client's background thread
+        client.start()
+
+        # Forward loop-closure events
+        def _fwd_closure(closure_id: int):
+            with self._odom_lock:
+                self._odom.loop_closure_id = closure_id
+            for cb in self._on_loop_closure:
+                try:
+                    cb(closure_id)
+                except Exception as e:
+                    logger.error(f"VOXL loop_closure forward error: {e}")
+
+        client.on_loop_closure(_fwd_closure)
+
+        logger.info("VOXL odometry mode started — polling VoxlRTABMapClient")
+        poll_interval = 1.0 / 30.0   # 30 Hz
+
+        while self._running:
+            pose = client.get_pose()
+            if pose is not None:
+                pos_ned, rpy, cov6 = pose
+                north, east, down  = float(pos_ned[0]), float(pos_ned[1]), float(pos_ned[2])
+                roll, pitch, yaw   = float(rpy[0]),     float(rpy[1]),     float(rpy[2])
+
+                # Derive confidence from covariance diagonal
+                pos_var   = float(np.mean(np.diag(cov6[:3, :3])))
+                confidence = max(0, min(100, int(100 - pos_var * 1000)))
+
+                quality   = client.get_quality()
+                if quality > 0:
+                    confidence = max(confidence, quality)
+
+                self._update_odom(
+                    north, east, down, roll, pitch, yaw,
+                    time.time(),
+                    confidence=confidence,
+                    loop_closure_id=client.get_loop_closure_id(),
+                )
+
+                # Update map nodes in odom
+                map_nodes = client.get_map_nodes()
+                if map_nodes > 0:
+                    with self._odom_lock:
+                        self._odom.num_features = map_nodes
+
+            time.sleep(poll_interval)
+
+        client.stop()
+
     def print_status(self):
         """Print current odometry status."""
         d = self.get()
@@ -577,25 +655,42 @@ def create_odom_provider(
 ) -> "RTABMapOdom":
     """
     Create an odometry provider based on source.
-    
+
     Args:
-        source: "sitl" | "ros2" | "orbslam3" | "t265_raw" | "simulated"
-        config: Optional dict; for orbslam3/ros2 may include odom_topic, etc.
-        bridge: MAVLink bridge (required for sitl mode)
-    
+        source: "sitl"     | "ros2" | "rtabmap" | "orbslam3" |
+                "t265_raw" | "simulated" | "voxl"
+        config: Optional dict; for orbslam3/ros2/voxl may include topic names,
+                voxl_host, voxl_port, voxl_mode, etc.
+        bridge: MAVLink bridge (required for sitl mode).
+
     Returns:
         Odometry provider with get(), start(), stop() interface.
     """
     cfg = config or {}
+
     if source == "sitl":
         return RTABMapOdom(mode="sitl", config={"bridge": bridge, **cfg})
+
     if source == "orbslam3":
         from .orbslam3_odom import ORBSLAM3Odom
         return ORBSLAM3Odom(config=cfg)
+
     if source in ("ros2", "rtabmap"):
         return RTABMapOdom(mode="ros2", config=cfg)
+
     if source == "t265_raw":
         return RTABMapOdom(mode="t265_raw", config=cfg)
+
     if source == "simulated":
         return RTABMapOdom(mode="simulated", config=cfg)
-    raise ValueError(f"Unknown odom source: {source}")
+
+    if source == "voxl":
+        from .voxl_rtabmap import VoxlRTABMapClient
+        voxl_mode   = cfg.get("voxl_mode",  "ros2_topic")
+        voxl_client = VoxlRTABMapClient(mode=voxl_mode, config=cfg)
+        return RTABMapOdom(mode="voxl", config=cfg, voxl_client=voxl_client)
+
+    raise ValueError(
+        f"Unknown odom source: {source!r}. "
+        f"Valid: sitl, ros2, rtabmap, orbslam3, t265_raw, simulated, voxl"
+    )

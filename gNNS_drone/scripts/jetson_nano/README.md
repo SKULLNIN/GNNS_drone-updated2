@@ -18,6 +18,26 @@ chmod +x scripts/jetson_nano/laptop_rviz2.sh scripts/jetson_nano/verify_bridge.s
 
 Use `ROS_DOMAIN_ID`, `ROS_LOCALHOST_ONLY=0`, and `RMW_IMPLEMENTATION=rmw_fastrtps_cpp` on both machines (scripts set these).
 
+### Integrated stack (RealSense + RTAB-Map + optional gNNS mission)
+
+Use **`scripts/jetson_nano/gnns_vio_stack.sh`** when you want one script that:
+
+- Launches RealSense with **gyro + accel + fused IMU** (`unite_imu_method:=2`) — required to avoid missing-IMU / `bad optional access` style failures when RTAB-Map expects `/camera/camera/imu`.
+- Launches RTAB-Map with the same tuned `rtabmap_args` as your manual command (aligned depth, queue, approx sync).
+- Optionally runs the Python mission with `--vio-source ros2` after `/odom` is live.
+
+```bash
+chmod +x scripts/jetson_nano/gnns_vio_stack.sh
+
+# Terminal A — full stack (camera in background, RTAB-Map + viz in foreground)
+./scripts/jetson_nano/gnns_vio_stack.sh stack
+
+# Terminal B — FC + mission (after /odom is publishing)
+./scripts/jetson_nano/gnns_vio_stack.sh mission --demo
+```
+
+See the script header for `realsense` / `rtabmap` / `mission` modes and env vars (`GNNS_WAIT_IMU`, `GNNS_RS_FPS`).
+
 ## Quick run
 
 From the **project root** on the Jetson Nano:
