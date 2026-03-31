@@ -40,10 +40,12 @@
 #   GNNS_WAIT_IMU=0          # default — do NOT wait for IMU (fixes stuck message)
 #   GNNS_WAIT_IMU=1          # enable after: ros2 topic hz /camera/camera/imu works
 #   GNNS_IMU_TOPIC=/.../imu  # override if your IMU is on a different path
-#   GNNS_RTABMAP_VIZ=0       # default — no GUI (SSH safe). Set 1 for desktop
+#   GNNS_RTABMAP_VIZ — unset + DISPLAY set → rtabmap_viz ON; unset + no DISPLAY → OFF.
+#                        Set 0 or 1 explicitly to override (SSH: export GNNS_RTABMAP_VIZ=0).
 #   GNNS_LOG_DIR=/tmp        # RealSense + RTAB-Map logs
 #   GNNS_ODOM_TOPIC=/odom    # rgbd_odometry output + rtabmap input (default /odom)
-#   GNNS_WAIT_FOR_TRANSFORM=0.5   # rtabmap TF wait (raise if odom→camera_link extrapolation warnings)
+#   GNNS_WAIT_FOR_TRANSFORM=1.0   # rtabmap TF wait (default; raise if extrapolation warnings persist)
+#   GNNS_ODOM_FRAME / GNNS_CAMERA_FRAME — must match rgbd_odometry TF (default odom / camera_link)
 #
 #   GNNS_RTABMAP_PRESET=default|recovery
 #       recovery — if you see "Not enough inliers 0/20" and odom quality=0:
@@ -93,7 +95,7 @@ GNNS_RGBD_ODOM_PID=""
 APPROX_SYNC_MAX="${GNNS_APPROX_SYNC_MAX:-0.5}"
 # TF lookup tolerance for rtabmap (seconds). Increase if you see "extrapolation into the future"
 # for odom→camera_link (often when odom TF updates slower than images).
-WAIT_FOR_TRANSFORM="${GNNS_WAIT_FOR_TRANSFORM:-0.5}"
+WAIT_FOR_TRANSFORM="${GNNS_WAIT_FOR_TRANSFORM:-1.0}"
 
 # -----------------------------------------------------------------------------
 # Topic layout — matches RealSense: camera_name:=camera camera_namespace:=camera
@@ -107,6 +109,9 @@ INFO_TOPIC="${GNNS_INFO_TOPIC:-${CAM_NS}/color/camera_info}"
 IMU_TOPIC="${GNNS_IMU_TOPIC:-${CAM_NS}/imu}"
 # rgbd_odometry publishes here; rtabmap SLAM subscribes (must match config/vio_config.yaml)
 ODOM_TOPIC="${GNNS_ODOM_TOPIC:-/odom}"
+# TF frame names (must match rgbd_odometry -p odom_frame_id / frame_id)
+ODOM_FRAME_FOR_TF="${GNNS_ODOM_FRAME:-odom}"
+CAMERA_FRAME_FOR_TF="${GNNS_CAMERA_FRAME:-camera_link}"
 
 # Default: do NOT wait for IMU (fixes endless "Waiting to initialize IMU orientation")
 # Set GNNS_WAIT_IMU=1 only after `ros2 topic hz /camera/camera/imu` is stable.
@@ -117,7 +122,15 @@ else
   WAIT_IMU_INIT="false"
 fi
 
-# rtabmap_viz: default off for SSH/headless (set GNNS_RTABMAP_VIZ=1 on desktop)
+# rtabmap_viz: if GNNS_RTABMAP_VIZ is unset, enable when DISPLAY is set (local monitor).
+if [[ -z "${GNNS_RTABMAP_VIZ+x}" ]]; then
+  if [[ -n "${DISPLAY:-}" ]]; then
+    GNNS_RTABMAP_VIZ=1
+    echo "[gnns_vio_stack] GNNS_RTABMAP_VIZ unset + DISPLAY set → rtabmap_viz ON (set GNNS_RTABMAP_VIZ=0 to disable)" >&2
+  else
+    GNNS_RTABMAP_VIZ=0
+  fi
+fi
 if [[ "${GNNS_RTABMAP_VIZ:-0}" == "1" ]]; then
   RTABMAP_VIZ="true"
 else
@@ -237,6 +250,7 @@ build_rtab_rargs() {
 # Common RealSense launch arguments (IMU required — fixes "bad optional access")
 RS_LAUNCH_ARGS=(
   align_depth.enable:=true
+  publish_tf:=true
   enable_color:=true
   enable_depth:=true
   enable_gyro:=true
@@ -266,6 +280,28 @@ wait_for_topic() {
     elapsed=$((elapsed + 1))
   done
   echo "[gnns_vio_stack] WARN: timeout waiting for ${topic}" >&2
+  return 1
+}
+
+# -----------------------------------------------------------------------------
+# Wait until TF connects odom -> camera_link (rgbd_odometry must publish publish_tf)
+# Without this, rtabmap sees "two unconnected trees" while /odom topic may still publish.
+# -----------------------------------------------------------------------------
+wait_for_tf_odom_camera_link() {
+  local timeout="${1:-90}"
+  local elapsed=0
+  echo "[gnns_vio_stack] Waiting for TF ${ODOM_FRAME_FOR_TF} -> ${CAMERA_FRAME_FOR_TF} (up to ${timeout}s)…"
+  while [[ "$elapsed" -lt "$timeout" ]]; do
+    if timeout 3 ros2 run tf2_ros tf2_echo "${ODOM_FRAME_FOR_TF}" "${CAMERA_FRAME_FOR_TF}" -r 20 2>&1 | head -15 | grep -qE 'Translation|At time'; then
+      echo "[gnns_vio_stack] OK: TF ${ODOM_FRAME_FOR_TF} -> ${CAMERA_FRAME_FOR_TF} (same tree as rgbd_odometry)."
+      return 0
+    fi
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
+  echo "[gnns_vio_stack] ERROR: TF ${ODOM_FRAME_FOR_TF} -> ${CAMERA_FRAME_FOR_TF} never connected (two TF trees)." >&2
+  echo "  rgbd_odometry must publish odom→camera_link (publish_tf=true). Check: ${ODOM_LOG}" >&2
+  echo "  Run: ros2 run tf2_tools view_frames   # or: ros2 run tf2_ros tf2_echo odom camera_link" >&2
   return 1
 }
 
@@ -398,6 +434,9 @@ launch_rtabmap_with_odom() {
     echo "  See: ${ODOM_LOG}" >&2
     exit 1
   fi
+  if ! wait_for_tf_odom_camera_link 90; then
+    exit 1
+  fi
 
   launch_rtabmap_slam
   cleanup_odom
@@ -455,6 +494,9 @@ launch_stack() {
   echo "[gnns_vio_stack] Waiting for odometry on ${ODOM_TOPIC}…"
   if ! wait_for_topic "${ODOM_TOPIC}" 60; then
     echo "[gnns_vio_stack] ERROR: no odometry on ${ODOM_TOPIC}. Check ${ODOM_LOG} and ${RS_LOG}" >&2
+    exit 1
+  fi
+  if ! wait_for_tf_odom_camera_link 90; then
     exit 1
   fi
 

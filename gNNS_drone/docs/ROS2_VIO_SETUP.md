@@ -298,3 +298,5 @@ Symptoms:
 - **Increase TF wait:** `export GNNS_WAIT_FOR_TRANSFORM=0.5` (default) or try `1.0` if warnings persist.
 
 **If the gap is tens of seconds (e.g. 200 s):** the fix is not only TF tolerance — **restart rgbd_odometry** or improve scene/lighting so VO tracks again; stale TF means the odometry pipeline is not publishing fresh transforms.
+
+**“Could not find a connection between `odom` and `camera_link` … two or more unconnected trees”:** `/odom` messages can exist without a valid **TF** edge `odom`→`camera_link`. That edge comes from **`rgbd_odometry`** (`publish_tf:=true`). If VO never locks, TF may never connect. The `gnns_vio_stack.sh` script **waits for that TF** before starting RTAB-Map. Check `gnns_rgbd_odometry.log` for registration failures. Ensure RealSense **`publish_tf:=true`** (camera internal chain) and the same **`camera_link`** / **`odom`** names as the odometry node (`GNNS_CAMERA_FRAME` / `GNNS_ODOM_FRAME` if you override frames).
