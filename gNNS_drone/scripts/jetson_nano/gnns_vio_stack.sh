@@ -3,42 +3,51 @@
 # gnns_vio_stack.sh — RealSense + RTAB-Map + gNNS VIO (Jetson / Ubuntu)
 # =============================================================================
 #
-# Integrates your working RTAB-Map launch with the fixes needed for stable IMU:
+# Common issues fixed in this script:
 #
-#   "imu bad optional access"  (librealsense / RTAB-Map)
+#  (0) Combined RTAB-Map launch (visual_odometry:=true) starts rgbd_odometry + rtabmap
+#      in one process tree — IMU wait / sync races can leave VO ref=-1 and kill /odom.
+#      Fix: 3-tier stack — RealSense → standalone rgbd_odometry (wait_imu_to_init:=false)
+#      → rtabmap SLAM with visual_odometry:=false subscribing to external /odom.
 #
-# Root cause (typical):
-#   • RealSense node launched WITHOUT gyro/accel → no /camera/camera/imu
-#   • RTAB-Map waits for IMU (wait_imu_to_init) or tries to fuse missing data
-#   • Driver code accesses std::optional IMU frames that were never enabled
+#  (1) "Waiting to initialize IMU orientation" forever
+#      • RTAB-Map waits for IMU + valid TF when wait_imu_to_init:=true
+#      • If IMU topic is wrong, TF missing, or sync fails, it never proceeds
+#      • Default: GNNS_WAIT_IMU=0 → wait_imu_to_init:=false (visual odometry
+#        starts without IMU gravity alignment). Set GNNS_WAIT_IMU=1 when IMU
+#        topic + TF are verified.
 #
-# Fix:
-#   • enable_gyro:=true enable_accel:=true unite_imu_method:=2
-#   • This publishes a fused sensor_msgs/Imu on .../imu at stable rate
+#  (2) stack mode: RealSense runs but RTAB-Map never starts
+#      • Bug: capturing PID with RS_PID="$(launch_realsense_bg)" also captured
+#        ALL stdout from `ros2 launch` → wrong PID / broken behavior.
+#      • Fix: redirect RealSense logs to a file; echo only the numeric PID.
 #
-# Usage (from repo root gNNS_drone/):
+# Usage (from repo root that contains gnns_drone/ and config/):
 #
 #   chmod +x scripts/jetson_nano/gnns_vio_stack.sh
 #
-#   # 1) Camera only (debug topics)
-#   ./scripts/jetson_nano/gnns_vio_stack.sh realsense
-#
-#   # 2) RTAB-Map only (after realsense is running in another terminal)
-#   ./scripts/jetson_nano/gnns_vio_stack.sh rtabmap
-#
-#   # 3) Full stack: RealSense (bg) + RTAB-Map (fg) — Ctrl+C stops both
-#   ./scripts/jetson_nano/gnns_vio_stack.sh stack
-#
-#   # 4) gNNS Python mission (needs /odom from RTAB-Map; run after stack)
-#   ./scripts/jetson_nano/gnns_vio_stack.sh mission
+#   ./scripts/jetson_nano/gnns_vio_stack.sh realsense    # camera + IMU only
+#   ./scripts/jetson_nano/gnns_vio_stack.sh rtabmap      # rgbd_odometry + RTAB (camera up)
+#   ./scripts/jetson_nano/gnns_vio_stack.sh stack        # RealSense + odom + RTAB (recommended)
 #   ./scripts/jetson_nano/gnns_vio_stack.sh mission --demo
 #
-# Environment overrides:
-#   ROS_DISTRO=humble
-#   ROS_DOMAIN_ID=42
-#   GNNS_WAIT_IMU=1          # 0 = RTAB-Map visual-only init (no IMU wait)
-#   GNNS_RS_FPS=15           # 15 or 30 (must match your CPU budget)
-#   GNNS_PROJECT_ROOT        # path to gNNS_drone parent for mission step
+# Environment (important):
+#   GNNS_WAIT_IMU=0          # default — do NOT wait for IMU (fixes stuck message)
+#   GNNS_WAIT_IMU=1          # enable after: ros2 topic hz /camera/camera/imu works
+#   GNNS_IMU_TOPIC=/.../imu  # override if your IMU is on a different path
+#   GNNS_RTABMAP_VIZ=0       # default — no GUI (SSH safe). Set 1 for desktop
+#   GNNS_LOG_DIR=/tmp        # RealSense + RTAB-Map logs
+#   GNNS_ODOM_TOPIC=/odom    # rgbd_odometry output + rtabmap input (default /odom)
+#
+#   GNNS_RTABMAP_PRESET=default|recovery
+#       recovery — if you see "Not enough inliers 0/20" and odom quality=0:
+#         uses Frame-to-Frame odometry, lower MinInliers, ORB features (see below)
+#
+# Quick VIO test (two terminals on Jetson):
+#   Terminal A: ./scripts/jetson_nano/gnns_vio_stack.sh realsense
+#   Terminal B:
+#     ros2 topic hz /camera/camera/imu
+#     GNNS_WAIT_IMU=0 GNNS_RTABMAP_VIZ=0 ./scripts/jetson_nano/gnns_vio_stack.sh rtabmap
 #
 # =============================================================================
 # Do not use set -u — ROS setup.bash references unset variables.
@@ -66,21 +75,42 @@ if [[ -f "$JETSON_DIR/fastdds_wifi_env.sh" ]]; then
   source "$JETSON_DIR/fastdds_wifi_env.sh"
 fi
 
+LOG_DIR="${GNNS_LOG_DIR:-/tmp}"
+mkdir -p "$LOG_DIR"
+RS_LOG="${LOG_DIR}/gnns_realsense.log"
+RT_LOG="${LOG_DIR}/gnns_rtabmap.log"
+ODOM_LOG="${LOG_DIR}/gnns_rgbd_odometry.log"
+
+# RGB/depth sync window (seconds). Tighter (e.g. 0.2) if timestamps drift at 15 Hz.
+APPROX_SYNC_MAX="${GNNS_APPROX_SYNC_MAX:-0.5}"
+
 # -----------------------------------------------------------------------------
 # Topic layout — matches RealSense: camera_name:=camera camera_namespace:=camera
+# If your IMU is on e.g. /camera/imu, run:
+#   export GNNS_IMU_TOPIC=/camera/imu
 # -----------------------------------------------------------------------------
 CAM_NS="/camera/camera"
 RGB_TOPIC="${GNNS_RGB_TOPIC:-${CAM_NS}/color/image_raw}"
 DEPTH_TOPIC="${GNNS_DEPTH_TOPIC:-${CAM_NS}/aligned_depth_to_color/image_raw}"
 INFO_TOPIC="${GNNS_INFO_TOPIC:-${CAM_NS}/color/camera_info}"
 IMU_TOPIC="${GNNS_IMU_TOPIC:-${CAM_NS}/imu}"
+# rgbd_odometry publishes here; rtabmap SLAM subscribes (must match config/vio_config.yaml)
+ODOM_TOPIC="${GNNS_ODOM_TOPIC:-/odom}"
 
-# RTAB-Map waits for first IMU by default; set GNNS_WAIT_IMU=0 if you insist on VO-only
-WAIT_IMU="${GNNS_WAIT_IMU:-1}"
+# Default: do NOT wait for IMU (fixes endless "Waiting to initialize IMU orientation")
+# Set GNNS_WAIT_IMU=1 only after `ros2 topic hz /camera/camera/imu` is stable.
+WAIT_IMU="${GNNS_WAIT_IMU:-0}"
 if [[ "$WAIT_IMU" == "1" ]]; then
   WAIT_IMU_INIT="true"
 else
   WAIT_IMU_INIT="false"
+fi
+
+# rtabmap_viz: default off for SSH/headless (set GNNS_RTABMAP_VIZ=1 on desktop)
+if [[ "${GNNS_RTABMAP_VIZ:-0}" == "1" ]]; then
+  RTABMAP_VIZ="true"
+else
+  RTABMAP_VIZ="false"
 fi
 
 # Frame rate (15 saves CPU on Nano; 30 is smoother for VIO)
@@ -94,9 +124,18 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# RTAB-Map CLI args (your tuned set; override with RTABMAP_EXTRA_ARGS)
+# RTAB-Map CLI args (override with RTABMAP_EXTRA_ARGS / GNNS_RTABMAP_PRESET)
 # -----------------------------------------------------------------------------
-RTABMAP_ARGS_BASE="--delete_db_on_start
+# Preset "recovery" addresses:
+#   • OdometryF2M: "Not enough inliers 0/20 (matches=N) between -1 and …"
+#     → geometric check fails (depth mismatch, sync, or F2M map ref -1).
+#   • rtabmap: "no odometry is provided. Image 0 is ignored"
+#     → consequence of failed rgbd_odometry (quality=0).
+#
+# recovery: F2F odometry (Strategy 1), lower MinInliers, ORB instead of FAST,
+#           slightly looser motion threshold — better bootstrap in dim light.
+# -----------------------------------------------------------------------------
+RTABMAP_ARGS_DEFAULT="--delete_db_on_start
 --Vis/MaxFeatures 500
 --Vis/MinInliers 15
 --Vis/EstimationType 1
@@ -119,13 +158,57 @@ RTABMAP_ARGS_BASE="--delete_db_on_start
 --RGBD/LinearSpeedUpdate 0.05
 --RGBD/AngularSpeedUpdate 0.05"
 
-RTAB_RARGS="${RTABMAP_ARGS_BASE//[$'\n']/ }"
-if [[ "${RTABMAP_KEEP_DB:-0}" == "1" ]]; then
-  RTAB_RARGS="${RTAB_RARGS/--delete_db_on_start/}"
-fi
-if [[ -n "${RTABMAP_EXTRA_ARGS:-}" ]]; then
-  RTAB_RARGS="${RTAB_RARGS} ${RTABMAP_EXTRA_ARGS}"
-fi
+RTABMAP_ARGS_RECOVERY="--delete_db_on_start
+--Vis/MaxFeatures 800
+--Vis/MinInliers 8
+--Vis/EstimationType 1
+--Vis/MotionThreshold 1.0
+--Kp/MaxFeatures 800
+--Kp/DetectorStrategy 3
+--Kp/MaxDepth 8.0
+--Kp/MinDepth 0.2
+--OdoF2M/MaxSize 1500
+--OdoF2M/BundleAdjustment 1
+--Odom/Strategy 1
+--Odom/GuessMotion true
+--Odom/FilteringStrategy 1
+--Odom/Holonomic false
+--Mem/STMSize 20
+--Mem/RehearsalSimilarity 0.45
+--Rtabmap/TimeThr 0
+--Rtabmap/DetectionRate 1
+--RGBD/ProximityBySpace true
+--RGBD/LinearSpeedUpdate 0.05
+--RGBD/AngularSpeedUpdate 0.05"
+
+# Built when launching RTAB-Map (see build_rtab_rargs)
+RTAB_RARGS=""
+
+build_rtab_rargs() {
+  local preset="${GNNS_RTABMAP_PRESET:-recovery}"
+  local base
+  case "$preset" in
+    default)
+      base="$RTABMAP_ARGS_DEFAULT"
+      echo "[gnns_vio_stack] RTAB-Map preset: default (F2M, FAST, MinInliers 15)"
+      ;;
+    recovery)
+      base="$RTABMAP_ARGS_RECOVERY"
+      echo "[gnns_vio_stack] RTAB-Map preset: recovery (F2F, ORB, MinInliers 8)"
+      ;;
+    *)
+      echo "[gnns_vio_stack] ERROR: unknown GNNS_RTABMAP_PRESET='${preset}' (use: default|recovery)" >&2
+      exit 1
+      ;;
+  esac
+  RTAB_RARGS="${base//[$'\n']/ }"
+  if [[ "${RTABMAP_KEEP_DB:-0}" == "1" ]]; then
+    RTAB_RARGS="${RTAB_RARGS/--delete_db_on_start/}"
+  fi
+  if [[ -n "${RTABMAP_EXTRA_ARGS:-}" ]]; then
+    RTAB_RARGS="${RTAB_RARGS} ${RTABMAP_EXTRA_ARGS}"
+  fi
+}
 
 # Common RealSense launch arguments (IMU required — fixes "bad optional access")
 RS_LAUNCH_ARGS=(
@@ -143,6 +226,26 @@ RS_LAUNCH_ARGS=(
 )
 
 # -----------------------------------------------------------------------------
+# Wait until a ROS topic has at least one message (timeout seconds)
+# -----------------------------------------------------------------------------
+wait_for_topic() {
+  local topic="$1"
+  local timeout="${2:-45}"
+  local elapsed=0
+  echo "[gnns_vio_stack] Waiting for topic (up to ${timeout}s): ${topic}"
+  while [[ "$elapsed" -lt "$timeout" ]]; do
+    if ros2 topic echo "$topic" --once >/dev/null 2>&1; then
+      echo "[gnns_vio_stack] OK: ${topic} is publishing."
+      return 0
+    fi
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
+  echo "[gnns_vio_stack] WARN: timeout waiting for ${topic}" >&2
+  return 1
+}
+
+# -----------------------------------------------------------------------------
 # RealSense: MUST enable IMU to avoid optional-access / missing-IMU failures
 # -----------------------------------------------------------------------------
 launch_realsense() {
@@ -151,18 +254,55 @@ launch_realsense() {
   exec ros2 launch realsense2_camera rs_launch.py "${RS_LAUNCH_ARGS[@]}"
 }
 
-# Background RealSense (for stack mode — do NOT use exec)
+# Background RealSense — MUST redirect stdout/stderr so PID capture is not corrupted
 launch_realsense_bg() {
-  ros2 launch realsense2_camera rs_launch.py "${RS_LAUNCH_ARGS[@]}" &
+  ros2 launch realsense2_camera rs_launch.py "${RS_LAUNCH_ARGS[@]}" >>"${RS_LOG}" 2>&1 &
   echo $!
 }
 
 # -----------------------------------------------------------------------------
-# RTAB-Map (no exec — so stack mode can trap and kill children)
+# Standalone rgbd_odometry (rtabmap_odom package) — decoupled from rtabmap SLAM
 # -----------------------------------------------------------------------------
-launch_rtabmap() {
-  echo "[gnns_vio_stack] Launching RTAB-Map…"
-  echo "  rgb=${RGB_TOPIC} depth=${DEPTH_TOPIC} imu=${IMU_TOPIC} wait_imu_to_init=${WAIT_IMU_INIT}"
+# Publishes nav_msgs/Odometry on ODOM_TOPIC and TF odom→camera_link.
+# wait_imu_to_init:=false on this node avoids blocking VO while IMU warms up.
+launch_rgbd_odometry_bg() {
+  build_rtab_rargs
+  local odom_rargs="${RTAB_RARGS}"
+  odom_rargs="${odom_rargs//--delete_db_on_start/}"
+  odom_rargs="$(echo "${odom_rargs}" | tr -s ' ' | sed 's/^ *//;s/ *$//')"
+  echo "[gnns_vio_stack] Launching rgbd_odometry (rtabmap_odom)…"
+  echo "  Log: ${ODOM_LOG}"
+  echo "  → ${ODOM_TOPIC}  (wait_imu_to_init=false on VO node)"
+  # shellcheck disable=SC2086
+  ros2 run rtabmap_odom rgbd_odometry ${odom_rargs} \
+    --ros-args \
+    -p frame_id:=camera_link \
+    -p odom_frame_id:=odom \
+    -p publish_tf:=true \
+    -p wait_imu_to_init:=false \
+    -p always_check_imu_tf:=false \
+    -p approx_sync:=true \
+    -p approx_sync_max_interval:=${APPROX_SYNC_MAX} \
+    -p sync_queue_size:=20 \
+    -p topic_queue_size:=10 \
+    -r rgb/image:=${RGB_TOPIC} \
+    -r depth/image:=${DEPTH_TOPIC} \
+    -r rgb/camera_info:=${INFO_TOPIC} \
+    -r imu:=${IMU_TOPIC} \
+    -r odom:=${ODOM_TOPIC} \
+    >>"${ODOM_LOG}" 2>&1 &
+  echo $!
+}
+
+# -----------------------------------------------------------------------------
+# RTAB-Map SLAM only (external odometry — no rgbd_odometry in this launch)
+# -----------------------------------------------------------------------------
+launch_rtabmap_slam() {
+  build_rtab_rargs
+  echo "[gnns_vio_stack] Launching RTAB-Map SLAM (visual_odometry:=false, uses ${ODOM_TOPIC})…"
+  echo "  Log: ${RT_LOG}"
+  echo "  rgb=${RGB_TOPIC} depth=${DEPTH_TOPIC} imu=${IMU_TOPIC}"
+  echo "  wait_imu_to_init=${WAIT_IMU_INIT}  rtabmap_viz=${RTABMAP_VIZ}"
   # shellcheck disable=SC2086
   ros2 launch rtabmap_launch rtabmap.launch.py \
     rgb_topic:="${RGB_TOPIC}" \
@@ -171,39 +311,112 @@ launch_rtabmap() {
     imu_topic:="${IMU_TOPIC}" \
     frame_id:=camera_link \
     approx_sync:=true \
-    approx_sync_max_interval:=0.5 \
+    approx_sync_max_interval:=${APPROX_SYNC_MAX} \
     queue_size:=20 \
     wait_imu_to_init:=${WAIT_IMU_INIT} \
-    visual_odometry:=true \
+    visual_odometry:=false \
     odom_frame_id:=odom \
     map_frame_id:=map \
     publish_tf_map:=true \
-    publish_tf_odom:=true \
-    odom_topic:=/odom \
-    rtabmap_viz:=true \
-    rtabmap_args:="${RTAB_RARGS}"
+    publish_tf_odom:=false \
+    odom_topic:=${ODOM_TOPIC} \
+    rtabmap_viz:=${RTABMAP_VIZ} \
+    rtabmap_args:="${RTAB_RARGS}" 2>&1 | tee -a "${RT_LOG}"
 }
 
 # -----------------------------------------------------------------------------
-# Full stack: RealSense background + RTAB-Map foreground
+# rgbd_odometry (bg) + RTAB-Map SLAM — use when RealSense is already running
+# -----------------------------------------------------------------------------
+launch_rtabmap_with_odom() {
+  echo "[gnns_vio_stack] RTAB-Map session (rgbd_odometry → ${ODOM_TOPIC} → rtabmap)…"
+  echo "[gnns_vio_stack] rgbd_odometry log: ${ODOM_LOG}"
+  echo "[gnns_vio_stack] RTAB-Map log:       ${RT_LOG}"
+
+  : >"${ODOM_LOG}"
+  : >"${RT_LOG}"
+
+  ODOM_PID="$(launch_rgbd_odometry_bg)"
+  if ! [[ "$ODOM_PID" =~ ^[0-9]+$ ]]; then
+    echo "[gnns_vio_stack] ERROR: invalid rgbd_odometry PID '${ODOM_PID}' — check ${ODOM_LOG}" >&2
+    exit 1
+  fi
+
+  cleanup_odom() {
+    echo "[gnns_vio_stack] Stopping rgbd_odometry (PID=${ODOM_PID})…"
+    kill "${ODOM_PID}" 2>/dev/null || true
+    wait "${ODOM_PID}" 2>/dev/null || true
+  }
+  trap cleanup_odom EXIT INT TERM
+
+  echo "[gnns_vio_stack] rgbd_odometry PID=${ODOM_PID}"
+  echo "[gnns_vio_stack] Waiting for odometry on ${ODOM_TOPIC}…"
+  if ! wait_for_topic "${ODOM_TOPIC}" 60; then
+    echo "[gnns_vio_stack] ERROR: no messages on ${ODOM_TOPIC}. Is the camera running?" >&2
+    echo "  See: ${ODOM_LOG}" >&2
+    exit 1
+  fi
+
+  launch_rtabmap_slam
+  cleanup_odom
+  trap - EXIT INT TERM
+}
+
+# -----------------------------------------------------------------------------
+# Full stack: RealSense background → rgbd_odometry → RTAB-Map foreground
 # -----------------------------------------------------------------------------
 launch_stack() {
-  echo "[gnns_vio_stack] Starting full stack (RealSense → RTAB-Map)…"
-  RS_PID="$(launch_realsense_bg)"
+  echo "[gnns_vio_stack] Starting full stack (RealSense → rgbd_odometry → RTAB-Map)…"
+  echo "[gnns_vio_stack] RealSense log:      ${RS_LOG}"
+  echo "[gnns_vio_stack] rgbd_odometry log:  ${ODOM_LOG}"
+  echo "[gnns_vio_stack] RTAB-Map log:       ${RT_LOG}"
 
+  : >"${RS_LOG}"
+  : >"${ODOM_LOG}"
+  : >"${RT_LOG}"
+
+  RS_PID="$(launch_realsense_bg)"
+  if ! [[ "$RS_PID" =~ ^[0-9]+$ ]]; then
+    echo "[gnns_vio_stack] ERROR: invalid RealSense PID '${RS_PID}' (launch bug?) — check ${RS_LOG}" >&2
+    exit 1
+  fi
+
+  ODOM_PID=""
   cleanup() {
     echo "[gnns_vio_stack] Shutting down…"
+    if [[ -n "${ODOM_PID}" ]] && [[ "$ODOM_PID" =~ ^[0-9]+$ ]]; then
+      kill "${ODOM_PID}" 2>/dev/null || true
+      wait "${ODOM_PID}" 2>/dev/null || true
+    fi
     kill "${RS_PID}" 2>/dev/null || true
     wait "${RS_PID}" 2>/dev/null || true
   }
   trap cleanup EXIT INT TERM
 
   echo "[gnns_vio_stack] RealSense PID=${RS_PID}"
-  echo "[gnns_vio_stack] Waiting for camera + IMU topics (8 s)…"
-  sleep 8
+  echo "[gnns_vio_stack] Waiting for camera streams (6 s)…"
+  sleep 6
 
-  # Foreground RTAB-Map; on exit, trap kills RealSense
-  launch_rtabmap
+  if [[ "$WAIT_IMU" == "1" ]]; then
+    wait_for_topic "$IMU_TOPIC" 30 || {
+      echo "[gnns_vio_stack] IMU not seen on ${IMU_TOPIC}" >&2
+      echo "  Run: ros2 topic list | grep -i imu" >&2
+      echo "  Or retry with: GNNS_WAIT_IMU=0 $0 stack" >&2
+    }
+  fi
+
+  ODOM_PID="$(launch_rgbd_odometry_bg)"
+  if ! [[ "$ODOM_PID" =~ ^[0-9]+$ ]]; then
+    echo "[gnns_vio_stack] ERROR: invalid rgbd_odometry PID '${ODOM_PID}' — check ${ODOM_LOG}" >&2
+    exit 1
+  fi
+  echo "[gnns_vio_stack] rgbd_odometry PID=${ODOM_PID}"
+  echo "[gnns_vio_stack] Waiting for odometry on ${ODOM_TOPIC}…"
+  if ! wait_for_topic "${ODOM_TOPIC}" 60; then
+    echo "[gnns_vio_stack] ERROR: no odometry on ${ODOM_TOPIC}. Check ${ODOM_LOG} and ${RS_LOG}" >&2
+    exit 1
+  fi
+
+  launch_rtabmap_slam
   cleanup
   trap - EXIT INT TERM
 }
@@ -217,8 +430,23 @@ launch_mission() {
   cd "$ROOT"
   echo "[gnns_vio_stack] gNNS mission from ${ROOT}"
   echo "  Ensure config/vio_config.yaml has odom_topic: /odom (or match your remap)"
-  # Pass remaining args to gnns_drone (e.g. --demo --vio-source ros2)
   exec python3 -m gnns_drone --vio-source ros2 "$@"
+}
+
+# -----------------------------------------------------------------------------
+# Print topics for debugging RealSense VIO
+# -----------------------------------------------------------------------------
+cmd_diagnose() {
+  echo "=== ros2 topic list (camera / imu / odom) ==="
+  ros2 topic list 2>/dev/null | grep -E -i 'camera|imu|odom|rtabmap' || true
+  echo ""
+  echo "=== Try IMU rate (adjust path if empty) ==="
+  echo "  ros2 topic hz ${IMU_TOPIC}"
+  echo "  ros2 topic echo ${IMU_TOPIC} --once"
+  echo ""
+  echo "=== If IMU path is wrong, set e.g. ==="
+  echo "  export GNNS_IMU_TOPIC=/camera/imu"
+  echo "  # or: ros2 topic list | grep imu"
 }
 
 # -----------------------------------------------------------------------------
@@ -232,7 +460,7 @@ case "$MODE" in
     launch_realsense
     ;;
   rtabmap)
-    launch_rtabmap
+    launch_rtabmap_with_odom
     ;;
   stack)
     launch_stack
@@ -240,18 +468,18 @@ case "$MODE" in
   mission)
     launch_mission "$@"
     ;;
+  diagnose)
+    cmd_diagnose
+    ;;
   help|--help|-h)
-    sed -n '1,45p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '1,55p' "$0" | sed 's/^# \{0,1\}//'
     echo ""
-    echo "Quick check after 'realsense' terminal is up:"
-    echo "  ros2 topic hz ${IMU_TOPIC}"
-    echo "  ros2 topic echo ${IMU_TOPIC} --once"
+    echo "Extra command:  diagnose  — list camera/imu/odom topics"
     echo ""
-    echo "If IMU still errors, try:"
-    echo "  GNNS_WAIT_IMU=0 ./scripts/jetson_nano/gnns_vio_stack.sh rtabmap"
+    echo "Logs (stack / rtabmap): ${RS_LOG} , ${ODOM_LOG} , ${RT_LOG}"
     ;;
   *)
-    echo "Unknown mode: $MODE — use: realsense | rtabmap | stack | mission | help" >&2
+    echo "Unknown mode: $MODE — use: realsense | rtabmap | stack | mission | diagnose | help" >&2
     exit 1
     ;;
 esac

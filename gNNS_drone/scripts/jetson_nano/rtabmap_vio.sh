@@ -3,6 +3,7 @@
 # rtabmap_vio.sh — RTAB-Map visual odometry + SLAM (ROS 2)
 # ================================================================
 # Expects D455 topics from d455_launch.sh (/camera/camera/...).
+# Depth must be aligned to color (same grid as color/camera_info).
 # Publishes /odom, /map, TF, and rtabmap topics.
 #
 # Usage:
@@ -53,11 +54,13 @@ exec ros2 launch rtabmap_launch rtabmap.launch.py \
   odom_frame_id:=odom \
   map_frame_id:=map \
   rgb_topic:=/camera/camera/color/image_raw \
-  depth_topic:=/camera/camera/depth/image_rect_raw \
+  depth_topic:=/camera/camera/aligned_depth_to_color/image_raw \
   camera_info_topic:=/camera/camera/color/camera_info \
   imu_topic:=/camera/camera/imu \
   wait_imu_to_init:=true \
-  approx_sync:=false \
+  approx_sync:=true \
+  approx_sync_max_interval:=0.5 \
+  queue_size:=20 \
   publish_tf_map:=true \
   publish_tf_odom:=true \
   odom_topic:=/odom \

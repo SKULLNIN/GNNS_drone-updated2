@@ -23,7 +23,8 @@ Use `ROS_DOMAIN_ID`, `ROS_LOCALHOST_ONLY=0`, and `RMW_IMPLEMENTATION=rmw_fastrtp
 Use **`scripts/jetson_nano/gnns_vio_stack.sh`** when you want one script that:
 
 - Launches RealSense with **gyro + accel + fused IMU** (`unite_imu_method:=2`) — required to avoid missing-IMU / `bad optional access` style failures when RTAB-Map expects `/camera/camera/imu`.
-- Launches RTAB-Map with the same tuned `rtabmap_args` as your manual command (aligned depth, queue, approx sync).
+- Starts **`rgbd_odometry` as its own process** (`rtabmap_odom` package) with **`wait_imu_to_init:=false`** on the VO node, then launches **RTAB-Map SLAM** with **`visual_odometry:=false`** so mapping subscribes to external `/odom` — avoids combined-launch IMU/sync races that yield **no odometry**.
+- Uses the same tuned `rtabmap_args` presets (aligned depth, queue, approx sync).
 - Optionally runs the Python mission with `--vio-source ros2` after `/odom` is live.
 
 ```bash
@@ -36,7 +37,13 @@ chmod +x scripts/jetson_nano/gnns_vio_stack.sh
 ./scripts/jetson_nano/gnns_vio_stack.sh mission --demo
 ```
 
-See the script header for `realsense` / `rtabmap` / `mission` modes and env vars (`GNNS_WAIT_IMU`, `GNNS_RS_FPS`).
+See the script header for `realsense` / `rtabmap` / `mission` / `diagnose` modes.
+
+**Stuck on “Waiting to initialize IMU orientation”?**  
+By default the script sets `GNNS_WAIT_IMU=0` so RTAB-Map does **not** block on IMU. After `ros2 topic hz /camera/camera/imu` works, you can use `GNNS_WAIT_IMU=1 ./scripts/jetson_nano/gnns_vio_stack.sh stack`. If your IMU topic differs, set `GNNS_IMU_TOPIC` (run `./scripts/jetson_nano/gnns_vio_stack.sh diagnose`).
+
+**Stack mode: RealSense runs but RTAB-Map does not**  
+Fixed: RealSense logs are redirected so the background PID is correct. Check `/tmp/gnns_realsense.log`, `/tmp/gnns_rgbd_odometry.log`, and `/tmp/gnns_rtabmap.log` (or `GNNS_LOG_DIR`).
 
 ## Quick run
 

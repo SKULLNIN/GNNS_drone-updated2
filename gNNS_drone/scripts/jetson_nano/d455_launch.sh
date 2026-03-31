@@ -29,6 +29,7 @@ export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}"
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fastdds_wifi_env.sh"
 
 exec ros2 launch realsense2_camera rs_launch.py \
+  align_depth.enable:=true \
   enable_gyro:=true \
   enable_accel:=true \
   unite_imu_method:=2 \

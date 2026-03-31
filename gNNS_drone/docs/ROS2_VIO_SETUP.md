@@ -11,6 +11,32 @@ Exact bring-up order for RealSense, IMU/TF, ORB-SLAM3, and RTAB-Map with gNNS Dr
 - `nav_msgs`, `sensor_msgs`, `tf2_ros`
 - RealSense camera (D435i / D455) with IMU source bridged to ROS2
 
+## RealSense topic namespace (Jetson / gNNS scripts)
+
+Many examples below use a **single** prefix such as `/camera/color/...`. The Jetson launch scripts use `camera_name:=camera` and `camera_namespace:=camera`, which yields a **double** segment **`/camera/camera/...`**:
+
+| Stream | Typical topic |
+|--------|----------------|
+| Color | `/camera/camera/color/image_raw` |
+| Depth (aligned to color) | `/camera/camera/aligned_depth_to_color/image_raw` |
+| `camera_info` (use with aligned depth) | `/camera/camera/color/camera_info` |
+| Fused IMU (`unite_imu_method:=2`) | `/camera/camera/imu` |
+
+Remap any generic `/camera/...` command to these paths when using `gnns_vio_stack.sh` or `d455_launch.sh`.
+
+## Three-tier RTAB-Map stack
+
+`rtabmap.launch.py` with **`visual_odometry:=true`** starts **rgbd_odometry** and **rtabmap** in one launch. If IMU wait, timestamp sync, or depth/color pairing fails, **rgbd_odometry** may never bootstrap (e.g. F2M ref `-1`, `quality=0`), so the mapper logs **“no odometry is provided”** and ignores images.
+
+The project script **splits** the pipeline into three processes:
+
+1. **RealSense** — color, aligned depth, gyro/accel, fused IMU.
+2. **Standalone `rgbd_odometry`** (`ros2 run rtabmap_odom rgbd_odometry`) — publishes `nav_msgs/Odometry` on **`GNNS_ODOM_TOPIC`** (default `/odom`) and TF `odom`→`camera_link`. This node uses **`wait_imu_to_init:=false`** so visual odometry is not blocked while the IMU warms up.
+3. **RTAB-Map SLAM** — **`visual_odometry:=false`**, subscribes to that odometry topic and runs mapping / loop closure. IMU is still passed to RTAB-Map for graph constraints when configured.
+
+Run: `./scripts/jetson_nano/gnns_vio_stack.sh stack`  
+Logs (default `GNNS_LOG_DIR=/tmp`): `gnns_realsense.log`, `gnns_rgbd_odometry.log`, `gnns_rtabmap.log`.
+
 ## Bring-up Order
 
 ### 1. RealSense Camera
@@ -59,7 +85,7 @@ Configure your ORB-SLAM3 ROS2 wrapper for RGB-D + inertial mode:
 - **IMU topic**: `sensor_msgs/Imu` (e.g. `/camera/imu` or `/imu/data`)
 - **Odometry output**: `nav_msgs/Odometry` on `/odom` (or set `odom_topic` in `config/vio_config.yaml`)
 
-Example launch (wrapper-dependent):
+Example launch (wrapper-dependent; **Jetson** users: use `/camera/camera/...` as in the table above):
 
 ```bash
 ros2 launch orbslam3_ros rgbd_inertial.launch.py \
@@ -78,7 +104,7 @@ ros2 topic echo /odom --no-arr
 
 ### 4. RTAB-Map (Mapping / Loop Closure)
 
-RTAB-Map runs in parallel for mapping. It does **not** need to publish odometry for FC control (ORB-SLAM3 provides that).
+**Pattern A — External odometry (ORB-SLAM3, another VIO node):** RTAB-Map does **not** run its own `rgbd_odometry`. Set **`visual_odometry:=false`** and point **`odom_topic`** at the same `/odom` (or custom topic) your VIO publishes.
 
 ```bash
 ros2 launch rtabmap_launch rtabmap.launch.py \
@@ -90,7 +116,9 @@ ros2 launch rtabmap_launch rtabmap.launch.py \
   odom_topic:=/odom
 ```
 
-If `visual_odometry:=false`, RTAB-Map can subscribe to external odom (e.g. from ORB-SLAM3) for mapping.
+**Pattern B — RTAB-Map’s own RGB-D odometry:** **`visual_odometry:=true`** (default in many tutorials). That starts **`rgbd_odometry` + `rtabmap`** together. For a more robust bring-up on Jetson, use **Pattern C**.
+
+**Pattern C — gNNS split stack (Jetson):** Run **`./scripts/jetson_nano/gnns_vio_stack.sh stack`** so **`rgbd_odometry`** and **RTAB-Map SLAM** are separate processes (see [Three-tier RTAB-Map stack](#three-tier-rtab-map-stack)). FC / `vio_config.yaml` still use **`odom_topic: /odom`** by default.
 
 ### 5. gNNS Drone Mission
 
@@ -204,3 +232,44 @@ If you see crashes or logs mentioning **optional access** / **IMU** while using 
    The project script `scripts/jetson_nano/gnns_vio_stack.sh` documents `GNNS_WAIT_IMU`.
 
 4. **Firmware / USB** — intermittent IMU can still cause edge-case errors; use a powered USB3 hub, short cable, and current RealSense firmware.
+
+---
+
+## Troubleshooting: "Not enough inliers 0/20" and "no odometry is provided"
+
+Symptoms in the console:
+
+- `rgbd_odometry`: `Registration failed: Not enough inliers 0/20 (matches=...) between -1 and ...`
+- `Odom: quality=0`
+- `rtabmap`: `RGB-D SLAM mode is enabled ... no odometry is provided. Image 0 is ignored!`
+- RViz: fixed frame `odom` but **empty** 3D view (no point cloud / trajectory)
+
+**What it means:** Feature matching finds correspondences (`matches≈50`), but **geometric verification** (pose from RGB + depth) yields **zero** inliers. The `-1` in `between -1 and N` is an invalid / empty **map** reference in Frame-to-Map mode — odometry never bootstraps, so RTAB-Map gets no `/odom`.
+
+**Typical causes:**
+
+1. **Depth ↔ color misalignment** — use **aligned depth to color** for both depth image and the same `camera_info` as color (`aligned_depth_to_color` + `color/camera_info`).
+2. **Poor sync** — RGB and depth timestamps too far apart; try smaller `approx_sync_max_interval` or fix frame rate (e.g. 30 Hz for both).
+3. **Low light / motion blur** — increase room light or use auto-exposure; avoid moving the camera until VO locks.
+4. **Frame-to-Map too strict at start** — try **Frame-to-Frame** odometry and **ORB** features with lower `Vis/MinInliers` (see `gnns_vio_stack.sh` preset `recovery`).
+
+**What to run (project script):**
+
+```bash
+# Default is now preset=recovery (F2F + ORB + MinInliers 8). To restore your old F2M/FAST tuning:
+GNNS_RTABMAP_PRESET=default ./scripts/jetson_nano/gnns_vio_stack.sh stack
+```
+
+**Quick checks:**
+
+```bash
+ros2 topic hz /camera/camera/color/image_raw
+ros2 topic hz /camera/camera/aligned_depth_to_color/image_raw
+# Rates should match (e.g. both 15 Hz or both 30 Hz).
+
+ros2 topic echo /camera/camera/color/camera_info --once
+ros2 run rqt_image_view rqt_image_view
+# Inspect depth: invalid pixels should not cover the whole scene.
+```
+
+If problems persist, temporarily use **depth** `image_rect_raw` **with** `depth/camera_info` (not aligned) only if you match RTAB-Map topics consistently — the usual fix is **aligned depth + color camera_info** as in `gnns_vio_stack.sh`.
