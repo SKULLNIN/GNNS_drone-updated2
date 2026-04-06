@@ -19,7 +19,7 @@ import logging
 import yaml
 from pathlib import Path
 from enum import IntEnum
-from typing import Optional, Any
+from typing import Optional, Any, List
 from pymavlink import mavutil
 
 logger = logging.getLogger("gnns.mavlink")
@@ -28,6 +28,26 @@ logger = logging.getLogger("gnns.mavlink")
 def _is_finite(*values) -> bool:
     """Check that all values are finite (not NaN/Inf)."""
     return all(math.isfinite(v) for v in values)
+
+
+def vision_position_covariance_6dof(
+    pos_var_m2: float,
+    rot_var_rad2: float = 0.01,
+) -> List[float]:
+    """
+    21-element upper-triangular row-major covariance for VISION_POSITION_ESTIMATE.
+    States: x, y, z (m^2), roll, pitch, yaw (rad^2).
+    """
+    cov = [0.0] * 21
+    v = max(1e-6, float(pos_var_m2))
+    r = max(1e-8, float(rot_var_rad2))
+    cov[0] = v
+    cov[6] = v
+    cov[11] = v
+    cov[15] = r
+    cov[18] = r
+    cov[20] = r
+    return cov
 
 
 class FCMode(IntEnum):
@@ -409,7 +429,8 @@ class MAVLinkBridge:
 
     def send_vision_position(self, x: float, y: float, z: float,
                               roll: float = 0, pitch: float = 0, yaw: float = 0,
-                              covariance: Optional[list] = None):
+                              covariance: Optional[List[float]] = None,
+                              pos_variance_m2: Optional[float] = None):
         """
         Send VISION_POSITION_ESTIMATE to FC.
         This is the core message that replaces GPS!
@@ -420,11 +441,19 @@ class MAVLinkBridge:
             z: Down position in meters (negative = up!)
             roll, pitch, yaw: Orientation in radians
             covariance: Optional 21-element upper-triangle covariance matrix
+            pos_variance_m2: If set (and covariance is None), build diagonal
+                position variance (m^2) from this value for EKF weighting.
         """
         # NaN guard — sending NaN to EKF will crash it
         if not _is_finite(x, y, z, roll, pitch, yaw):
             logger.warning("NaN/Inf in vision position! Skipping send.")
             return
+
+        if covariance is None and pos_variance_m2 is not None:
+            if not math.isfinite(pos_variance_m2):
+                logger.warning("NaN/Inf in pos_variance_m2! Skipping send.")
+                return
+            covariance = vision_position_covariance_6dof(pos_variance_m2)
 
         usec = int(time.time() * 1e6)
 

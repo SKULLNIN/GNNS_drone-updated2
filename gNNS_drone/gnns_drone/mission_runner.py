@@ -105,6 +105,8 @@ class MissionRunner:
         # VIO → FC forwarding (not needed in SITL — FC already has position)
         self._vio_send_running = False
         self._vio_send_thread = None
+        self._conf_hold_count = 0
+        self._CONF_HOLD_CYCLES = 3
 
         # Graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -207,16 +209,41 @@ class MissionRunner:
         self._vio_send_thread.start()
         logger.info(f"VIO→FC sender started at {VIO_SEND_RATE} Hz")
 
+    def _vision_pos_variance_m2(self, data: OdomData) -> float:
+        if data.covariance_pos > 0:
+            return max(0.05, float(data.covariance_pos) ** 2)
+        return max(0.05, (100 - data.confidence) * 0.01)
+
     def _vio_send_loop(self):
         interval = 1.0 / VIO_SEND_RATE
+        min_confidence = self.config.min_odom_confidence
         while self._vio_send_running:
             data = self.odom.get()
-            if data.confidence > 30:
+            if data.is_stale:
+                time.sleep(interval)
+                continue
+            if data.confidence >= min_confidence:
+                self._conf_hold_count = self._CONF_HOLD_CYCLES
+            elif self._conf_hold_count > 0:
+                self._conf_hold_count -= 1
+
+            send_full = data.confidence >= min_confidence or self._conf_hold_count > 0
+            send_pos_only = (not send_full) and data.confidence > 10
+            pos_var = self._vision_pos_variance_m2(data)
+
+            if send_full:
                 self.bridge.send_vision_position(
                     data.x, data.y, data.z,
-                    data.roll, data.pitch, data.yaw
+                    data.roll, data.pitch, data.yaw,
+                    pos_variance_m2=pos_var,
                 )
                 self.bridge.send_vision_speed(data.vx, data.vy, data.vz)
+            elif send_pos_only:
+                self.bridge.send_vision_position(
+                    data.x, data.y, data.z,
+                    data.roll, data.pitch, data.yaw,
+                    pos_variance_m2=pos_var,
+                )
             time.sleep(interval)
 
     def _stop_vio_sender(self):
@@ -389,7 +416,7 @@ class MissionRunner:
         """
         logger.info(f"  Flying to ({target_n:.1f}, {target_e:.1f})...")
         start = time.time()
-        dt = 0.1  # 10 Hz control loop
+        dt = 0.05  # 20 Hz control loop
 
         while time.time() - start < timeout:
             if not self.mission_active:
@@ -426,7 +453,7 @@ class MissionRunner:
                              f"spd={speed:.2f}m/s "
                              f"alt={data.altitude:.1f}m ")
 
-            # Maintain 10 Hz
+            # Maintain 20 Hz
             sleep_t = dt - (time.time() - loop_start)
             if sleep_t > 0:
                 time.sleep(sleep_t)

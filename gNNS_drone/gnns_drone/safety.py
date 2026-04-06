@@ -163,14 +163,18 @@ class SafetyMonitor:
                 pass
 
     def _monitor_loop(self):
-        """Main safety monitoring loop (runs at 2 Hz)."""
+        """Main safety monitoring loop (~10 Hz; battery/EKF/VIO-state at ~2 Hz)."""
+        slow_cycle = 0
         while self._running:
             try:
                 # Only check safety when armed
                 if not self.bridge.is_armed:
                     self._low_confidence_start = 0.0
-                    time.sleep(0.5)
+                    time.sleep(0.1)
                     continue
+
+                slow_cycle += 1
+                do_slow = slow_cycle % 5 == 0
 
                 # 1. Check FC connection
                 if not self.bridge.is_connected:
@@ -216,34 +220,33 @@ class SafetyMonitor:
                         "LAND"
                     )
 
-                # 6. Check battery
-                batt = self.bridge.get_latest("BATTERY_STATUS")
-                if batt and hasattr(batt, 'battery_remaining'):
-                    if 0 < batt.battery_remaining < self.min_battery_pct:
-                        self._trigger_failsafe(
-                            f"Low battery: {batt.battery_remaining}%", "RTH"
-                        )
+                # 6–8. Slower checks (battery, EKF, extended VIO state)
+                if do_slow:
+                    batt = self.bridge.get_latest("BATTERY_STATUS")
+                    if batt and hasattr(batt, 'battery_remaining'):
+                        if 0 < batt.battery_remaining < self.min_battery_pct:
+                            self._trigger_failsafe(
+                                f"Low battery: {batt.battery_remaining}%", "RTH"
+                            )
 
-                # 7. Check EKF health
-                ekf = self.bridge.get_latest("EKF_STATUS_REPORT")
-                if ekf and hasattr(ekf, 'flags'):
-                    const_pos = bool(ekf.flags & 128)
-                    if const_pos:
-                        self._trigger_failsafe("EKF constant position mode", "LAND")
+                    ekf = self.bridge.get_latest("EKF_STATUS_REPORT")
+                    if ekf and hasattr(ekf, 'flags'):
+                        const_pos = bool(ekf.flags & 128)
+                        if const_pos:
+                            self._trigger_failsafe("EKF constant position mode", "LAND")
 
-                # 8. Extended VIO-state checks (only when VIOAlgorithm available)
-                if self._vio_algo is not None:
-                    try:
-                        vio_state = self._vio_algo.get_last_state()
-                        if vio_state is not None:
-                            self._check_vio_state(vio_state)
-                    except Exception as exc:
-                        logger.debug(f"_check_vio_state error: {exc}")
+                    if self._vio_algo is not None:
+                        try:
+                            vio_state = self._vio_algo.get_last_state()
+                            if vio_state is not None:
+                                self._check_vio_state(vio_state)
+                        except Exception as exc:
+                            logger.debug(f"_check_vio_state error: {exc}")
 
             except Exception as e:
                 logger.error(f"Safety monitor error: {e}")
 
-            time.sleep(0.5)  # 2 Hz
+            time.sleep(0.1)  # 10 Hz base rate
 
     # ==============================================================
     # Extended VIO-state failure checks

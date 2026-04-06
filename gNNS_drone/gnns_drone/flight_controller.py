@@ -96,6 +96,10 @@ class FlightConfig:
     max_altitude: float = 10.0
     min_odom_confidence: int = 30
 
+    # Filtering (PID D-term EMA, raw position EMA before PID)
+    d_filter_alpha: float = 0.5
+    pos_filter_alpha: float = 0.4
+
     @staticmethod
     def from_yaml(path: Optional[str] = None) -> 'FlightConfig':
         """Load config from YAML file."""
@@ -171,6 +175,17 @@ class FlightConfig:
         cfg.final_gains = PIDGains(fg.get("kp", 0.5), fg.get("ki", 0.0),
                                     fg.get("kd", 0.3))
 
+        # Derivative / position filtering (tunable for control-loop rate)
+        flt = data.get("filtering", {})
+        cfg.d_filter_alpha = float(flt.get("d_term_alpha", 0.5))
+        cfg.pos_filter_alpha = float(flt.get("position_alpha", 0.4))
+
+        sf = data.get("safety", {})
+        cfg.geofence_radius = sf.get("geofence_radius", cfg.geofence_radius)
+        cfg.min_battery_pct = sf.get("min_battery_pct", cfg.min_battery_pct)
+        cfg.max_altitude = sf.get("max_altitude", cfg.max_altitude)
+        cfg.min_odom_confidence = sf.get("min_odom_confidence", cfg.min_odom_confidence)
+
         logger.info(f"Flight config loaded from {path}")
         return cfg
 
@@ -189,7 +204,7 @@ class PIDController:
     Their Kp=4.0 maps force directly; ours maps meters → m/s.
     """
 
-    def __init__(self, gains: PIDGains):
+    def __init__(self, gains: PIDGains, d_filter_alpha: float = 0.5):
         self.kp = gains.kp
         self.ki = gains.ki
         self.kd = gains.kd
@@ -199,7 +214,7 @@ class PIDController:
         self._prev_error = 0.0
         self._prev_time = 0.0
         self._initialized = False
-        self._d_filter_alpha = 0.3   # Heavy D-term filtering for smooth derivative
+        self._d_filter_alpha = float(d_filter_alpha)
         self._filtered_d = 0.0
 
     def reset(self):
@@ -372,11 +387,12 @@ class FlightController:
 
     def __init__(self, config: Optional[FlightConfig] = None):
         self.config = config or FlightConfig.from_yaml()
+        _dfa = self.config.d_filter_alpha
 
         # PID controllers — one per axis
-        self._pid_north = PIDController(self.config.horizontal_gains)
-        self._pid_east = PIDController(self.config.horizontal_gains)
-        self._pid_alt = PIDController(self.config.vertical_gains)
+        self._pid_north = PIDController(self.config.horizontal_gains, d_filter_alpha=_dfa)
+        self._pid_east = PIDController(self.config.horizontal_gains, d_filter_alpha=_dfa)
+        self._pid_alt = PIDController(self.config.vertical_gains, d_filter_alpha=_dfa)
 
         # Velocity smoothers — one per axis
         self._smooth_north = VelocitySmoother(self.config.horiz_accel_limit)
@@ -384,8 +400,8 @@ class FlightController:
         self._smooth_alt = VelocitySmoother(self.config.vert_accel_limit)
 
         # Landing PID (separate gains for landing precision)
-        self._pid_land_fwd = PIDController(self.config.align_gains)
-        self._pid_land_right = PIDController(self.config.align_gains)
+        self._pid_land_fwd = PIDController(self.config.align_gains, d_filter_alpha=_dfa)
+        self._pid_land_right = PIDController(self.config.align_gains, d_filter_alpha=_dfa)
         self._smooth_land_fwd = VelocitySmoother(self.config.landing_accel_limit)
         self._smooth_land_right = VelocitySmoother(self.config.landing_accel_limit)
 
@@ -397,7 +413,7 @@ class FlightController:
 
         # Position filter — smooths VIO noise before PID
         # IMPORTANT: Filter RAW POSITION, not error signal!
-        self._pos_filter = PositionFilter(alpha=0.3)
+        self._pos_filter = PositionFilter(alpha=self.config.pos_filter_alpha)
 
     def reset(self):
         """Reset all controllers (call before new flight phase)."""

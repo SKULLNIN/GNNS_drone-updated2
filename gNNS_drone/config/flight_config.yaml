@@ -41,8 +41,8 @@ position_gains:
 # We boost horizontal for competition
 # ============================================================
 velocity_limits:
-  cruise_max: 4.0        # Competition speed (~14km/h)
-  approach_max: 2.5      # Approach speed
+  cruise_max: 2.0        # Safe for RTAB-Map VIO; raise only after stable tuning
+  approach_max: 1.2      # Approach speed
   landing_horizontal: 0.3
   landing_final: 0.15
   ascent_max: 1.0        # Fast climb
@@ -115,6 +115,13 @@ landing:
 
   max_landing_time: 60.0
   max_tilt_deg: 15.0
+
+# ============================================================
+# PID filtering (D-term EMA, position pre-filter before PID)
+# ============================================================
+filtering:
+  d_term_alpha: 0.5      # Higher = faster D-term response (tune with control-loop Hz)
+  position_alpha: 0.4    # EMA on raw N/E/alt before error (VIO noise rejection)
 
 # ============================================================
 # Safety & Geofence

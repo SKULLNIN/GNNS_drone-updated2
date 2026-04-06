@@ -120,7 +120,7 @@ depth_camera:
 # RANGEFINDER (optional, downward-facing for altitude)
 # ============================================================
 rangefinder:
-  enabled: false
+  enabled: true
   type: "tf_luna"                # "tfmini", "tf_luna", "vl53l1x"
   port: "/dev/ttyUSB1"
   baudrate: 115200

@@ -87,6 +87,10 @@ class Navigator:
         # Mission state
         self._mission_active = False
 
+        # Odom confidence hysteresis (avoid toggling velocity fusion at EKF)
+        self._conf_hold_count = 0
+        self._CONF_HOLD_CYCLES = 3
+
     def set_waypoints(self, wm: WaypointManager):
         self.waypoints = wm
 
@@ -108,6 +112,12 @@ class Navigator:
         if self._fwd_thread:
             self._fwd_thread.join(timeout=2.0)
 
+    def _vision_pos_variance_m2(self, data: OdomData) -> float:
+        """Position variance (m^2) for VISION_POSITION_ESTIMATE covariance."""
+        if data.covariance_pos > 0:
+            return max(0.05, float(data.covariance_pos) ** 2)
+        return max(0.05, (100 - data.confidence) * 0.01)
+
     def _odom_forward_loop(self):
         """Send RTAB-Map odometry to FC at 30 Hz."""
         interval = 1.0 / self._fwd_rate
@@ -118,17 +128,32 @@ class Navigator:
 
             if data.is_stale:
                 logger.warning(f"Odom stale (age={data.age_sec:.1f}s), skipping FC send")
-            elif data.confidence > min_confidence:
-                self.bridge.send_vision_position(
-                    data.x, data.y, data.z,
-                    data.roll, data.pitch, data.yaw
+            else:
+                if data.confidence >= min_confidence:
+                    self._conf_hold_count = self._CONF_HOLD_CYCLES
+                elif self._conf_hold_count > 0:
+                    self._conf_hold_count -= 1
+
+                send_full = (
+                    data.confidence >= min_confidence or self._conf_hold_count > 0
                 )
-                self.bridge.send_vision_speed(data.vx, data.vy, data.vz)
-            elif data.confidence > 10:
-                self.bridge.send_vision_position(
-                    data.x, data.y, data.z,
-                    data.roll, data.pitch, data.yaw
-                )
+                send_pos_only = (not send_full) and data.confidence > 10
+
+                pos_var = self._vision_pos_variance_m2(data)
+
+                if send_full:
+                    self.bridge.send_vision_position(
+                        data.x, data.y, data.z,
+                        data.roll, data.pitch, data.yaw,
+                        pos_variance_m2=pos_var,
+                    )
+                    self.bridge.send_vision_speed(data.vx, data.vy, data.vz)
+                elif send_pos_only:
+                    self.bridge.send_vision_position(
+                        data.x, data.y, data.z,
+                        data.roll, data.pitch, data.yaw,
+                        pos_variance_m2=pos_var,
+                    )
 
             time.sleep(interval)
 
@@ -293,7 +318,7 @@ class Navigator:
                 )
                 last_log = now
 
-            time.sleep(0.1)  # 10 Hz control loop
+            time.sleep(0.05)  # 20 Hz control loop
 
         logger.warning("Fly-to-waypoint timeout!")
         return False

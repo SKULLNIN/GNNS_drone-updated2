@@ -44,8 +44,8 @@ ekf:
   # Value 6 = ExternalNav for all position/velocity sources
   EK3_SRC1_POSXY: 6            # Horizontal position from ExternalNav
   EK3_SRC1_VELXY: 6            # Horizontal velocity from ExternalNav
-  EK3_SRC1_POSZ: 6             # Vertical position from ExternalNav
-                                # ⚠️ Change to 1 (Baro) if VIO altitude is noisy
+  EK3_SRC1_POSZ: 6             # Vertical: ExternalNav; with RNGFND1 (below) EKF uses RF near ground
+                                # If no rangefinder: set to 1 (Baro) for less Z drift
   EK3_SRC1_VELZ: 6             # Vertical velocity from ExternalNav
   EK3_SRC1_YAW: 6              # Yaw from ExternalNav
                                 # ⚠️ Change to 1 (Compass) if VIO yaw drifts
@@ -70,10 +70,9 @@ ekf:
   # Lower values = EKF trusts VIO more
   # Higher values = EKF trusts IMU more (more filtering)
   # START with higher values (0.5-1.0) and decrease as VIO proves reliable
-  EK3_EXTNAV_NOISE: 0.3        # External nav position noise (meters)
-  EK3_EXTNAV_DELAY: 20         # External nav delay (ms) — measure this!
-                                # T265 ≈ 10-20ms, ORB-SLAM3 ≈ 30-80ms
-                                # Match VISO_DELAY_MS; see docs/ROS2_VIO_SETUP.md
+  EK3_EXTNAV_NOISE: 0.5        # External nav position noise (meters); tune down when VIO is solid
+  EK3_EXTNAV_DELAY: 50         # External nav delay (ms) — RTAB-Map / Jetson often 30–80ms
+                                # Match VISO_DELAY_MS; measure on your stack
 
 # ============================================================
 # VISION POSITION INPUT
@@ -95,7 +94,7 @@ viso:
   VISO_POS_Y: 0.0              # Right from CG (positive = right)
   VISO_POS_Z: 0.0              # Down from CG (positive = down)
   
-  VISO_DELAY_MS: 20            # Processing delay of VIO system (milliseconds)
+  VISO_DELAY_MS: 50            # Processing delay of VIO stack (ms); align with EK3_EXTNAV_DELAY
                                 # Measure: timestamp_sent - timestamp_image_captured
 
 # ============================================================
@@ -138,10 +137,8 @@ modes:
 # ALTITUDE CONTROL
 # ============================================================
 altitude:
-  # If using a downward rangefinder (TF-Luna, TFMini):
-  RNGFND1_TYPE: 0               # 0 = None. Set to sensor type if installed.
-                                 # 20 = Benewake TFMini
-                                 # 25 = Benewake TF-Luna
+  # Downward rangefinder (Benewake TF-Luna) — match wiring to SERIAL port in MP
+  RNGFND1_TYPE: 25              # 25 = Benewake TF-Luna (0 = disabled)
   RNGFND1_MAX_CM: 600           # Maximum range in cm
   RNGFND1_MIN_CM: 10            # Minimum range in cm
 
@@ -149,7 +146,7 @@ altitude:
 # SPEED & NAVIGATION LIMITS
 # ============================================================
 speed:
-  WPNAV_SPEED: 300              # Horizontal speed in cm/s (3 m/s)
+  WPNAV_SPEED: 200              # Horizontal speed cm/s (2.0 m/s; align with flight_config cruise_max)
                                  # ⚠️ Start SLOW! VIO can lose tracking at high speed
   WPNAV_SPEED_UP: 150           # Climb speed cm/s (1.5 m/s)
   WPNAV_SPEED_DN: 100           # Descent speed cm/s (1 m/s)
