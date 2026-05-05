@@ -101,8 +101,15 @@ class DroneController:
     def fly_to(self, target_n, target_e):
         """Fly to NED position (non-blocking)."""
         if self._fly_thread and self._fly_thread.is_alive():
-            self.status_msg = "Already flying!"
-            return
+            # Cancel previous flight and wait for it to stop
+            self.flying = False
+            self._fly_thread.join(timeout=2.0)
+
+        # Send zero velocity to clear any stale command from old thread
+        try:
+            self.bridge.send_velocity_ned_yaw(0, 0, 0, 0)
+        except Exception:
+            pass
 
         def _fly():
             self.flying = True

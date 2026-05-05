@@ -370,6 +370,9 @@ class RTABMapOdom:
             self._run_t265()
             return
 
+        # NOTE: rclpy.init() is global per-process. If LidarFusion or
+        # ORBSLAM3Odom already initialised rclpy in this process, we share
+        # the same context. Shutdown in any module tears it down for all.
         if not rclpy.ok():
             rclpy.init()
         node = rclpy.create_node('gnns_odom_subscriber')

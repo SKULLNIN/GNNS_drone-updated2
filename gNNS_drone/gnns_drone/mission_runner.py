@@ -33,9 +33,11 @@ from .coordinate_utils import GPSCoord, NEDCoord, WaypointManager, gps_to_ned
 logger = logging.getLogger("gnns.mission")
 
 # ============================================================
-# DEFAULTS
+# DEFAULTS  (overridden by flight_config.yaml at runtime)
 # ============================================================
-FLIGHT_ALTITUDE = 2.5
+# NOTE: Do NOT edit these constants for competition tuning.
+# Change config/flight_config.yaml instead — these are fallbacks only.
+FLIGHT_ALTITUDE = 2.5   # fallback; real value comes from FlightConfig.cruise_altitude
 VIO_SEND_RATE = 30
 GROUND_WAIT_TIME = 3.0
 

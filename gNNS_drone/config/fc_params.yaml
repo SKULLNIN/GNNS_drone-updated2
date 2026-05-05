@@ -146,7 +146,7 @@ altitude:
 # SPEED & NAVIGATION LIMITS
 # ============================================================
 speed:
-  WPNAV_SPEED: 200              # Horizontal speed cm/s (2.0 m/s; align with flight_config cruise_max)
+  WPNAV_SPEED: 400              # Horizontal speed cm/s (4.0 m/s; align with flight_config cruise_max)
                                  # ⚠️ Start SLOW! VIO can lose tracking at high speed
   WPNAV_SPEED_UP: 150           # Climb speed cm/s (1.5 m/s)
   WPNAV_SPEED_DN: 100           # Descent speed cm/s (1 m/s)

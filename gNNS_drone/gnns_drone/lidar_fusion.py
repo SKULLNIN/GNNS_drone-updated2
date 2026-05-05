@@ -115,6 +115,8 @@ class LidarFusion:
             from rclpy.node import Node
             from sensor_msgs.msg import LaserScan
 
+            # NOTE: rclpy.init() is global per-process. Sharing context with
+            # RTABMapOdom / ORBSLAM3Odom. Shutdown in any module affects all.
             if not rclpy.ok():
                 rclpy.init()
 

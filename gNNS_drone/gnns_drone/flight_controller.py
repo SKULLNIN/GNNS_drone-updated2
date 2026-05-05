@@ -169,11 +169,15 @@ class FlightConfig:
         cfg.target_lost_final_timeout = ld.get("target_lost_final_timeout", 5.0)
 
         ag = ld.get("align_gains", {})
-        cfg.align_gains = PIDGains(ag.get("kp", 0.8), ag.get("ki", 0.0),
-                                    ag.get("kd", 0.2))
+        cfg.align_gains = PIDGains(
+            ag.get("kp", 0.8), ag.get("ki", 0.0),
+            ag.get("kd", 0.2), ag.get("max_integral", 0.3)
+        )
         fg = ld.get("final_gains", {})
-        cfg.final_gains = PIDGains(fg.get("kp", 0.5), fg.get("ki", 0.0),
-                                    fg.get("kd", 0.3))
+        cfg.final_gains = PIDGains(
+            fg.get("kp", 0.5), fg.get("ki", 0.0),
+            fg.get("kd", 0.3), fg.get("max_integral", 0.2)
+        )
 
         # Derivative / position filtering (tunable for control-loop rate)
         flt = data.get("filtering", {})

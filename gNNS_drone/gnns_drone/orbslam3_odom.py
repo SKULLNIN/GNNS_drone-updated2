@@ -205,6 +205,8 @@ class ORBSLAM3Odom:
             has_rtabmap = False
             RtabmapInfo = None
 
+        # NOTE: rclpy.init() is global per-process. Sharing context with
+        # RTABMapOdom / LidarFusion. Shutdown in any module affects all.
         if not rclpy.ok():
             rclpy.init()
         node = rclpy.create_node("gnns_orbslam3_odom_subscriber")

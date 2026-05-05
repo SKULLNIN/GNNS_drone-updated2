@@ -26,8 +26,10 @@ sleep 5
 # 5. START GAZEBO
 echo "Starting Gazebo..."
 # Using the full path to the plugin to be absolutely sure
+# NOTE: Adjust SITL_PATH to wherever you cloned this repo.
+SITL_PATH="$(cd "$(dirname "$0")" && pwd)"
 gazebo --verbose -s /opt/ros/noetic/lib/libgazebo_ros_api_plugin.so \
-  /mnt/c/Users/guutu/OneDrive/Desktop/mavlink/gNNS_drone/sitl/gazebo_worlds/gnns_depth.world &
+  "${SITL_PATH}/sitl/gazebo_worlds/gnns_depth.world" &
 sleep 10
 
 # 6. START ARDUPILOT

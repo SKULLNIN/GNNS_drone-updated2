@@ -31,6 +31,7 @@ from .target_detector import TargetDetector, TargetDetection
 from .precision_landing import PrecisionLander, LandingConfig
 from .flight_controller import FlightController, FlightConfig
 from .coordinate_utils import GPSCoord, NEDCoord, WaypointManager
+from typing import Optional
 
 logger = logging.getLogger("gnns.navigator")
 
@@ -75,7 +76,7 @@ class Navigator:
         )
         self.lander = PrecisionLander(bridge, odom, detector, landing_cfg)
 
-        self.waypoints: WaypointManager = None
+        self.waypoints: Optional[WaypointManager] = None
         self.current_wp_index = 0
         self.waypoints_completed = 0
 
@@ -164,13 +165,13 @@ class Navigator:
     def execute_mission(self, flight_alt: Optional[float] = None) -> bool:
         """
         Execute the full 5-waypoint mission with precision landing.
-        
+
         Returns True if all waypoints visited.
         """
         if flight_alt:
             self.config.cruise_altitude = flight_alt
 
-        if not self.waypoints or self.waypoints.count == 0:
+        if self.waypoints is None or self.waypoints.count == 0:
             logger.error("No waypoints loaded!")
             return False
 
@@ -296,9 +297,10 @@ class Navigator:
                         data.x, data.y, data.altitude, dt=dt
                     )
                     vx, vy, vz = result[0], result[1], result[2]
-                    self.bridge.send_velocity_ned(vx * 0.5, vy * 0.5, vz)
+                    yaw = result[3] if len(result) > 3 else 0.0
+                    self.bridge.send_velocity_ned_yaw(vx * 0.5, vy * 0.5, vz, yaw)
                     time.sleep(dt)
-                self.bridge.send_velocity_ned(0, 0, 0)
+                self.bridge.send_velocity_ned_yaw(0, 0, 0, yaw)
                 return True
 
             # PID + acceleration-limited velocity command

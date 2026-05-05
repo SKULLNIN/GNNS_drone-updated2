@@ -118,7 +118,7 @@ class TakeoffController:
         self._alt_tol        = cfg.get("alt_tol",            self.ALT_TOL)
         self._hold_rate      = cfg.get("alt_hold_rate_hz",   self.ALT_HOLD_RATE_HZ)
         self._lost_timeout   = cfg.get("lost_timeout_s",     self.LOST_TIMEOUT_S)
-        self._max_ascent     = cfg.get("max_ascent_time",    self.MAX_ASCENT_TIME)
+        self._max_ascent_time = cfg.get("max_ascent_time",   self.MAX_ASCENT_TIME)
 
         self._state: TakeoffState = TakeoffState.PRE_FLIGHT_CHECK
         self._abort_reason: str = ""

@@ -135,15 +135,17 @@ class MAVLinkBridge:
         self._latest_msgs = {}
         self._msg_lock = threading.Lock()
         
-        # ACK tracking (thread-safe, fixes race condition with recv thread)
+        # ACK tracking (protected by _ack_lock so two callers don't steal each other)
         self._pending_ack_cmd = -1
         self._pending_ack_result = -1
         self._ack_event = threading.Event()
-        
-        # Param tracking (thread-safe, fixes race condition with recv thread)
+        self._ack_lock = threading.Lock()
+
+        # Param tracking (protected by _param_lock)
         self._pending_param_name = ""
         self._pending_param_value = None
         self._param_event = threading.Event()
+        self._param_lock = threading.Lock()
         
         # Logging already set in main() or parent script
         pass
@@ -156,7 +158,11 @@ class MAVLinkBridge:
             if default.exists():
                 config_path = str(default)
             else:
-                logger.warning("No config file found, using defaults")
+                logger.warning(
+                    f"mavlink_config.yaml not found at {default}. "
+                    "Falling back to SITL defaults (tcp:127.0.0.1:5762). "
+                    "For real hardware, create config/mavlink_config.yaml with your serial port."
+                )
                 return self._default_config()
 
         with open(config_path, 'r') as f:
@@ -332,16 +338,18 @@ class MAVLinkBridge:
                         result = result_names.get(msg.result, f"UNKNOWN({msg.result})")
                         logger.info(f"CMD_ACK: command={msg.command}, result={result}")
                     # Wake up _wait_ack if waiting for this command
-                    if msg.command == self._pending_ack_cmd:
-                        self._pending_ack_result = msg.result
-                        self._ack_event.set()
+                    with self._ack_lock:
+                        if msg.command == self._pending_ack_cmd:
+                            self._pending_ack_result = msg.result
+                            self._ack_event.set()
 
                 # Handle PARAM_VALUE — notify waiting get_param/set_param
                 elif msg_type == "PARAM_VALUE":
                     param_id = msg.param_id.strip('\x00')
-                    if param_id == self._pending_param_name:
-                        self._pending_param_value = msg.param_value
-                        self._param_event.set()
+                    with self._param_lock:
+                        if param_id == self._pending_param_name:
+                            self._pending_param_value = msg.param_value
+                            self._param_event.set()
 
                 # Handle STATUSTEXT from FC
                 elif msg_type == "STATUSTEXT":
@@ -711,9 +719,10 @@ class MAVLinkBridge:
 
     def get_param(self, param_name: str, timeout: float = 3.0):
         """Read a parameter from the FC (thread-safe, uses recv thread)."""
-        self._param_event.clear()
-        self._pending_param_name = param_name
-        self._pending_param_value = None
+        with self._param_lock:
+            self._param_event.clear()
+            self._pending_param_name = param_name
+            self._pending_param_value = None
 
         self._conn().mav.param_request_read_send(
             self._conn().target_system, self._conn().target_component,
@@ -721,21 +730,24 @@ class MAVLinkBridge:
         )
         # Wait for recv thread to deliver the PARAM_VALUE
         if self._param_event.wait(timeout=timeout):
-            value = self._pending_param_value
+            with self._param_lock:
+                value = self._pending_param_value
+                self._pending_param_name = ""
             logger.debug(f"Param {param_name} = {value}")
-            self._pending_param_name = ""
             return value
 
+        with self._param_lock:
+            self._pending_param_name = ""
         logger.warning(f"Failed to read param: {param_name}")
-        self._pending_param_name = ""
         return None
 
     def set_param(self, param_name: str, value: float, timeout: float = 3.0) -> bool:
         """Set a parameter on the FC (thread-safe, uses recv thread)."""
         logger.info(f"Setting param {param_name} = {value}")
-        self._param_event.clear()
-        self._pending_param_name = param_name
-        self._pending_param_value = None
+        with self._param_lock:
+            self._param_event.clear()
+            self._pending_param_name = param_name
+            self._pending_param_value = None
 
         self._conn().mav.param_set_send(
             self._conn().target_system, self._conn().target_component,
@@ -745,13 +757,15 @@ class MAVLinkBridge:
         )
         # Wait for recv thread to deliver confirmation
         if self._param_event.wait(timeout=timeout):
-            received = self._pending_param_value
-            self._pending_param_name = ""
+            with self._param_lock:
+                received = self._pending_param_value
+                self._pending_param_name = ""
             if received is not None and abs(received - value) < 0.001:
                 logger.info(f"Param {param_name} set to {received}")
                 return True
+        with self._param_lock:
+            self._pending_param_name = ""
         logger.error(f"Failed to set param {param_name}")
-        self._pending_param_name = ""
         return False
 
     # ==============================================================
@@ -762,17 +776,22 @@ class MAVLinkBridge:
         """
         Wait for COMMAND_ACK for a specific command.
         Uses event-based approach: the recv thread sets the event when it
-        receives the matching ACK. No recv_match race condition.
+        receives the matching ACK. Guarded by _ack_lock so two callers
+        in different threads don't steal each other's events.
         """
-        self._ack_event.clear()
-        self._pending_ack_cmd = command_id
-        self._pending_ack_result = -1
+        with self._ack_lock:
+            self._ack_event.clear()
+            self._pending_ack_cmd = command_id
+            self._pending_ack_result = -1
 
         if self._ack_event.wait(timeout=timeout):
+            with self._ack_lock:
+                result = self._pending_ack_result
+                self._pending_ack_cmd = -1
+            return result == mavutil.mavlink.MAV_RESULT_ACCEPTED
+
+        with self._ack_lock:
             self._pending_ack_cmd = -1
-            return self._pending_ack_result == mavutil.mavlink.MAV_RESULT_ACCEPTED
-        
-        self._pending_ack_cmd = -1
         logger.warning(f"ACK timeout for command {command_id}")
         return False
 
@@ -902,6 +921,9 @@ class MAVLinkBridge:
             sensor_id:           Sensor ID (0 = first sensor).
         """
         if not _is_finite(flow_x, flow_y, alt):
+            return
+        if not _is_finite(gyro_x, gyro_y):
+            logger.warning("NaN/Inf in optical-flow gyro! Skipping send.")
             return
         if quality < 0 or quality > 255:
             quality = max(0, min(255, quality))

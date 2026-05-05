@@ -1024,7 +1024,6 @@ class VIOEKF:
         R: measurement noise covariance (m × m)
         """
         m = len(z)
-        z_pred = H @ self.x[:H.shape[1]] if H.shape[1] <= self.N else H @ self.x
 
         # Pad H to full state width if needed
         if H.shape[1] < self.N:
