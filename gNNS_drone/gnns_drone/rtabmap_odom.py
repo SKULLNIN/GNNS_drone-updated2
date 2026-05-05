@@ -280,9 +280,18 @@ class RTABMapOdom:
         logger.info(f"RTAB-Map odometry started (mode={self.mode})")
 
     def stop(self):
+        """
+        Stop the odometry thread.
+        Order matters: set _running=False first so the inner loop exits,
+        then join. If the inner thread spawns a tracker (e.g. VIOTracker),
+        that tracker's own stop() is called from inside the thread before
+        we join, avoiding a hung join on a blocked camera pipeline.
+        """
         self._running = False
         if self._thread:
-            self._thread.join(timeout=3.0)
+            self._thread.join(timeout=5.0)
+            if self._thread.is_alive():
+                logger.warning("Odometry thread did not stop cleanly within 5 s")
         logger.info("Odometry stopped")
 
     def _update_odom(self, x, y, z, roll, pitch, yaw, 
@@ -671,14 +680,19 @@ def create_odom_provider(
     Args:
         source: "sitl"     | "ros2" | "rtabmap" | "orbslam3" |
                 "t265_raw" | "simulated" | "voxl"
-        config: Optional dict; for orbslam3/ros2/voxl may include topic names,
-                voxl_host, voxl_port, voxl_mode, etc.
+        config: Optional dict; caller-supplied keys win over ros2_odom defaults.
+                For orbslam3/ros2/voxl may include topic names, voxl_host, etc.
         bridge: MAVLink bridge (required for sitl mode).
 
     Returns:
         Odometry provider with get(), start(), stop() interface.
     """
     cfg = config or {}
+
+    # NOTE: Config merge precedence — caller-supplied cfg overrides
+    # ros2_odom defaults, but if the caller passes config={} the defaults
+    # from vio_config.yaml are used silently. This is intentional so that
+    # missing keys fall back to the YAML rather than crashing.
 
     if source == "sitl":
         return RTABMapOdom(mode="sitl", config={"bridge": bridge, **cfg})

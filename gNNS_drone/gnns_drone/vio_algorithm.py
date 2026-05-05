@@ -904,27 +904,29 @@ class VIOEKF:
         """
         Update EKF with 3-D feature positions expressed in world (NED) frame.
 
-        NOTE: Centroid-of-features is NOT the drone position (features are
-        typically in front of the camera). Using it directly as h(x)=p injects
-        a forward bias. Disabled until a proper PnP or reprojection residual
-        update is implemented. The EKF still gets corrections from optical-flow
-        velocity, LiDAR altitude, and RTABMap pose.
+        ⚠️  WARNING — DEAD RECKONING LIMITATION:
+        Centroid-of-features is NOT the drone position (features are typically
+        in front of the camera). The old implementation (centroid → position)
+        injected a forward bias. It has been DISABLED.
+
+        Consequence: in "gnns_vio" mode the EKF currently receives:
+          • IMU pre-integration  (prediction)
+          • Optical-flow velocity (velocity correction)
+          • LiDAR altitude       (Z correction)
+          • RTABMap pose         (position correction, if fed externally)
+        but NO direct visual POSITION correction.
+
+        Over 1000 m this is effectively dead-reckoning; position drift will be
+        5–20 m. For the competition, use "ros2" / "rtabmap" / "orbslam3" as
+        the primary odometry source instead of "gnns_vio".
+
+        To fix gnns_vio properly, replace this stub with a PnP or
+        reprojection-residual EKF update.
 
         Args:
-            pts3d_world: (M, 3) float32 world-frame 3-D positions.
+            pts3d_world: (M, 3) float32 world-frame 3-D positions (ignored).
         """
-        # DISABLED — see note above.
-        # Proper visual update requires solving PnP or using reprojection
-        # residuals, not assuming centroid == drone position.
         return
-
-        # The previous (buggy) implementation was:
-        #   obs = np.mean(pts3d_world, axis=0)
-        #   H[0:3, 0:3] = np.eye(3)
-        # which wrongly treated the scene centroid as the drone position.
-
-        # If you need a weak position correction here, implement a
-        # structure-from-motion keyframe update instead.
 
     # ------------------------------------------------------------------ #
     # Update: optical flow velocity

@@ -163,7 +163,9 @@ class VIOTracker:
         if self.camera_type == "t265":
             self._thread = threading.Thread(target=self._run_t265,
                                              daemon=True, name="vio-t265")
-        elif self.camera_type == "d435i":
+        elif self.camera_type in ("d435i", "d455"):
+            # D455 shares the same UVC/IMU pipeline as D435i; only minor
+            # intrinsics differ, which are read at runtime.
             self._thread = threading.Thread(target=self._run_d435i,
                                              daemon=True, name="vio-d435i")
         elif self.camera_type == "simulated":
@@ -310,7 +312,9 @@ class VIOTracker:
                     self._pose.pitch = pitch
                     self._pose.yaw = yaw
                     self._pose.confidence = confidence
-                    self._pose.covariance = 0.01 * (100 - confidence)
+                    # Floor covariance so SafetyMonitor never sees 0.0
+                    # (which would mean "perfectly accurate").
+                    self._pose.covariance = max(0.05, 0.01 * (100 - confidence))
 
                 self._stats.last_pose = self.get_pose()
 
@@ -525,7 +529,8 @@ class VIOTracker:
                     self._pose.yaw        = vio_state.yaw
                     self._pose.confidence = int(vio_state.confidence)
                     self._pose.features   = vio_state.num_features_tracked
-                    self._pose.covariance = vio_state.pos_cov_scalar
+                    # Floor covariance so SafetyMonitor never sees 0.0
+                    self._pose.covariance = max(0.05, vio_state.pos_cov_scalar)
 
                 self._stats.frames_processed += 1
                 fps_counter += 1
