@@ -434,7 +434,16 @@ class RTABMapOdom:
             while self._running:
                 rclpy.spin_once(node, timeout_sec=0.1)
         finally:
-            node.destroy_node()
+            try:
+                node.destroy_node()
+            except Exception:
+                pass
+            try:
+                import rclpy
+                if rclpy.ok():
+                    rclpy.shutdown()
+            except Exception:
+                pass
 
     # ==============================================================
     # T265 RAW MODE — Direct T265 tracking (fallback)

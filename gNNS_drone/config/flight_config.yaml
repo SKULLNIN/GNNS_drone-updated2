@@ -1,18 +1,20 @@
 # ============================================================
 # gNNS Drone — Flight Controller Gains & Parameters
 # ============================================================
+# COMPETITION PROFILE: GPS-denied, 5 waypoints, 1000 m range,
+# 15 min flight time, camera/LiDAR/IMU only.
+#
 # TUNED FROM autonomy_core SO3 controller gains:
 #   pos: {x: 4.0, y: 4.0, z: 4.0}
 #   vel: {x: 3.5, y: 3.5, z: 3.5}
 #   stopping_policy: acc_xy=6.0, jerk_xy=3.0
 #   trajectory_planner: max_v=3.0, max_a=4.0, max_j=2.0
 #
-# Our PID maps position_error → velocity, so gains are scaled
-# differently from SO3 (which maps to thrust+attitude).
-#
-# KEY RULE: ArduPilot's inner loop does the actual attitude/thrust
-# control. Our outer loop ONLY outputs velocity commands.
-# So we want SMOOTH velocity profiles, not aggressive ones.
+# NOTE ON VIO DRIFT:
+#   Without GPS and without loop closures (5 separate destinations),
+#   RTAB-Map/ORB-SLAM3 accumulates scale drift over distance.
+#   Over 1000 m total, expect 5–20 m position error at final waypoints.
+#   Mitigations: conservative speed, good lighting, textured ground.
 # ============================================================
 
 # ============================================================
@@ -41,12 +43,14 @@ position_gains:
 # We boost horizontal for competition
 # ============================================================
 velocity_limits:
-  cruise_max: 2.0        # Safe for RTAB-Map VIO; raise only after stable tuning
-  approach_max: 1.2      # Approach speed
+  # COMPETITION: Need ~5 m/s to cover 1000 m in 15 min (including 5 landings + RTH).
+  # Raise only if VIO tracking remains stable during test flights.
+  cruise_max: 4.0        # 4 m/s = 240 m/min (conservative for 1000 m missions)
+  approach_max: 1.5      # Slow down near waypoint for landing accuracy
   landing_horizontal: 0.3
   landing_final: 0.15
-  ascent_max: 1.0        # Fast climb
-  descent_max: 1.0       # Fast descent
+  ascent_max: 1.5        # Climb fast to cruise altitude
+  descent_max: 1.5       # Descend fast between waypoints
   descent_landing: 0.2
   descent_final: 0.1
 
@@ -65,9 +69,9 @@ acceleration_limits:
 # autonomy_core: tol_pos=3.0, final_goal_reach=7.0
 # ============================================================
 waypoint:
-  cruise_altitude: 2.5
-  arrival_radius: 2.0
-  slowdown_radius: 8.0
+  cruise_altitude: 3.0   # Slightly higher for obstacle clearance at 4 m/s
+  arrival_radius: 2.5    # Land within 2.5 m of target (VIO drift limited)
+  slowdown_radius: 12.0  # Start decelerating 12 m out (smooth at 4 m/s)
   heading_mode: "auto"
 
 # ============================================================
@@ -127,8 +131,11 @@ filtering:
 # Safety & Geofence
 # ============================================================
 safety:
-  geofence_radius: 100.0       # Competition: large radius
-  min_battery_pct: 20.0
-  max_altitude: 10.0
+  # COMPETITION: Must exceed 1000 m. Set to 1500 m for margin.
+  geofence_radius: 1500.0
+  # 15 min flight at 4 m/s cruise ≈ 3600 m range. 15% battery buffer.
+  min_battery_pct: 15.0
+  # Stay below competition altitude limit (check rules; 20 m is safe).
+  max_altitude: 20.0
   min_odom_confidence: 30
   vio_lost_action: "LAND"

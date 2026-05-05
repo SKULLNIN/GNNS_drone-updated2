@@ -293,10 +293,8 @@ class LidarFusion:
                     for s in final
                 ]
                 self.bridge.send_obstacle_distances(
-                    distances=sectors_cm,
-                    increment_deg=int(_SECTOR_DEG),
-                    min_distance_cm=int(self._min_range_m * 100),
-                    max_distance_cm=self._max_range_cm,
+                    sectors_cm,
+                    int(_SECTOR_DEG),
                 )
             except Exception as e:
                 logger.debug(f"send_obstacle_distances error: {e}")
@@ -326,6 +324,12 @@ class LidarFusion:
         finally:
             try:
                 node.destroy_node()
+            except Exception:
+                pass
+            try:
+                import rclpy
+                if rclpy.ok():
+                    rclpy.shutdown()
             except Exception:
                 pass
 

@@ -229,9 +229,11 @@ class MAVLinkBridge:
                 f"Component={self._conn().target_component}, "
                 f"Type={hb.type}, Autopilot={hb.autopilot}"
             )
-            # Start receive thread + heartbeat thread
-            self._start_recv_thread()
-            self._start_heartbeat_thread()
+            # Start receive thread + heartbeat thread (guard against duplicates)
+            if self._recv_thread is None or not self._recv_thread.is_alive():
+                self._start_recv_thread()
+            if self._heartbeat_thread is None or not self._heartbeat_thread.is_alive():
+                self._start_heartbeat_thread()
             return True
         else:
             logger.error("No heartbeat received — check wiring & baud rate!")

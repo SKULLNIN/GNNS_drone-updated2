@@ -15,7 +15,7 @@ Run this FIRST before every flight!
 import time
 import sys
 import logging
-from typing import Optional
+from typing import Optional, List
 from .mavlink_bridge import MAVLinkBridge
 
 logger = logging.getLogger("gnns.diag")
@@ -54,7 +54,7 @@ class Diagnostics:
 
     def __init__(self, bridge: Optional[MAVLinkBridge] = None, config_path: Optional[str] = None):
         self.bridge = bridge
-        self.results: list[DiagResult] = []
+        self.results: List[DiagResult] = []
         self.config_path = config_path
 
     @property
@@ -145,6 +145,23 @@ class Diagnostics:
             else:
                 self._add("Param ARMING_CHECK", True,
                            "GPS arming check disabled", int(arming))
+
+        # Check geofence is large enough for competition (1000 m range)
+        fence_enable = self.bridge.get_param("FENCE_ENABLE")
+        fence_radius = self.bridge.get_param("FENCE_RADIUS")
+        if fence_enable is not None and int(fence_enable) == 1:
+            if fence_radius is not None and fence_radius < 1200:
+                self._add("Param FENCE_RADIUS", False,
+                           f"Competition requires >1200 m, got {fence_radius}m",
+                           fence_radius, ">1200")
+                all_ok = False
+            else:
+                self._add("Param FENCE_RADIUS", True,
+                           "Geofence large enough for competition",
+                           fence_radius, ">1200")
+        else:
+            self._add("Param FENCE_ENABLE", True,
+                       "Geofence disabled (rely on companion safety)")
 
         return all_ok
 
@@ -287,21 +304,11 @@ class Diagnostics:
         """Test MAVLink link quality."""
         print("\n--- Checking Link Quality ---")
 
-        # Measure latency via TIMESYNC
-        start = time.time()
-        self.bridge.conn.mav.timesync_send(0, int(time.time() * 1e9))
-        
-        msg = self.bridge.conn.recv_match(type='TIMESYNC', blocking=True,
-                                           timeout=3.0)
-        if msg:
-            latency = (time.time() - start) * 1000
-            ok = latency < 50
-            self._add("Link Latency", ok,
-                       f"{latency:.1f}ms" + (" (good)" if ok else " (HIGH!)"))
-        else:
-            self._add("Link Latency", False, "TIMESYNC timeout")
+        # NOTE: We do NOT use recv_match() here because the background
+        # receive thread already consumes all messages. Using recv_match
+        # would race with it and steal messages. We rely on stats instead.
 
-        # Check message rate
+        # Check message rate (already flowing from background thread)
         count_before = self.bridge.stats.messages_received
         time.sleep(2.0)
         count_after = self.bridge.stats.messages_received
@@ -309,8 +316,15 @@ class Diagnostics:
 
         ok = rate > 5
         self._add("Message Rate", ok,
-                   f"{rate:.0f} msg/s from FC" + 
+                   f"{rate:.0f} msg/s from FC" +
                    ("" if ok else " (LOW — check baud rate!)"))
+
+        # Latency proxy: time since last heartbeat
+        hb_age = time.time() - self.bridge.stats.last_heartbeat_time
+        latency_ok = hb_age < 2.0
+        self._add("Link Latency", latency_ok,
+                   f"last heartbeat {hb_age:.1f}s ago" +
+                   (" (good)" if latency_ok else " (HIGH!)"))
 
         return True
 

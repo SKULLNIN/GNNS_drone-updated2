@@ -208,8 +208,8 @@ class PrecisionLander:
         while not self._should_abort():
             elapsed = time.time() - search_start
             if elapsed > self.config.search_timeout:
-                logger.warning("Search timeout! Landing at current position.")
-                return True  # Land anyway (fallback)
+                logger.warning("Search timeout! No target found — landing at current position.")
+                return False  # Abort precision landing, caller will do normal land
 
             det = self.detector.get_detection()
             if det.detected and det.confidence > 0.5:

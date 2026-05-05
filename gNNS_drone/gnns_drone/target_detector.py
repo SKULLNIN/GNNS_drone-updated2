@@ -325,7 +325,7 @@ class TargetDetector:
             return det
 
         M = cv2.moments(largest)
-        if M["m00"] == 0:
+        if M["m00"] < 1e-6:
             det.detected = False
             return det
 
@@ -357,11 +357,25 @@ class TargetDetector:
     def _median_depth_disk(depth_frame, cx: int, cy: int, radius_px: int = 5) -> float:
         """Robust range (m) from median of valid depth samples in a disk (single-pixel depth is noisy)."""
         vals = []
+        # Get frame dimensions for bounds checking
+        try:
+            width = depth_frame.get_width()
+            height = depth_frame.get_height()
+        except Exception:
+            # Fallback for numpy array depth frames
+            if hasattr(depth_frame, 'shape'):
+                height, width = depth_frame.shape[:2]
+            else:
+                return -1.0
         for dy in range(-radius_px, radius_px + 1):
             for dx in range(-radius_px, radius_px + 1):
                 if dx * dx + dy * dy > radius_px * radius_px:
                     continue
-                d = depth_frame.get_distance(cx + dx, cy + dy)
+                px = cx + dx
+                py = cy + dy
+                if not (0 <= px < width and 0 <= py < height):
+                    continue
+                d = depth_frame.get_distance(px, py)
                 if 0.15 < d < 50.0:
                     vals.append(d)
         if not vals:

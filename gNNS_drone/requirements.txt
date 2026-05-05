@@ -1,7 +1,34 @@
+# ============================================================
+# gNNS Drone — Python Dependencies
+# ============================================================
+# Install on target (Jetson Nano / dev PC):
+#   pip install -r requirements.txt
+#
+# Platform notes:
+#   - pyrealsense2: On Jetson Nano you may need the Librealsense build
+#     from source (pip wheels often don't include ARM64).
+#   - rplidar-roboticia: Only needed if using RPLiDAR hardware.
+#   - opencv-contrib-python: Needed for ArUco detection (cv2.aruco).
+#   - rclpy (ROS2): NOT installable via pip; install via apt/ros2 distro.
+# ============================================================
+
+# Core MAVLink communication
 pymavlink>=2.4.40
+
+# RealSense camera SDK
 pyrealsense2>=2.50.0
+
+# Config parsing
 pyyaml>=6.0
+
+# Numerical computing
 numpy>=1.21.0
+
+# LiDAR driver (optional — only if using RPLiDAR)
 rplidar-roboticia>=0.9.5
+
+# Computer vision (ArUco, optical flow, feature detection)
 opencv-contrib-python>=4.5.0
+
+# Scientific computing (used in EKF, geometry)
 scipy>=1.7.0

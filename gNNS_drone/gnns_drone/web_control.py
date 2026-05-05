@@ -157,11 +157,12 @@ class DroneController:
                     time.sleep(sleep_t)
 
             self.bridge.send_velocity_ned(0, 0, 0)
+            elapsed = time.time() - start
             self.status_msg = "✗ Timeout"
             self.flight_log.append({
                 "target": [target_n, target_e],
                 "error": round(dist, 2),
-                "time": 60,
+                "time": round(elapsed, 1),
                 "ok": False,
             })
             self.flying = False

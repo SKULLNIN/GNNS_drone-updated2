@@ -258,8 +258,6 @@ class PIDController:
 
         # D term with low-pass filter (prevents VIO noise spikes)
         raw_d = (error - self._prev_error) / dt
-        if not hasattr(self, '_filtered_d'):
-            self._filtered_d = 0.0
         self._filtered_d = (self._d_filter_alpha * raw_d +
                            (1 - self._d_filter_alpha) * self._filtered_d)
         d = self.kd * self._filtered_d

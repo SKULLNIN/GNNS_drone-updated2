@@ -325,11 +325,14 @@ class TakeoffController:
 
             time.sleep(0.1)
 
-        logger.error(
-            f"VIO init timeout after {self._vio_init_to:.0f}s — "
-            f"last conf={state.confidence:.1f}% feats={state.num_features_tracked}"
-            if (state := self._get_vio_state()) else ""
-        )
+        state = self._get_vio_state()
+        if state:
+            logger.error(
+                f"VIO init timeout after {self._vio_init_to:.0f}s — "
+                f"last conf={state.confidence:.1f}% feats={state.num_features_tracked}"
+            )
+        else:
+            logger.error(f"VIO init timeout after {self._vio_init_to:.0f}s — no state")
         return False
 
     # ------------------------------------------------------------------ #
@@ -433,8 +436,12 @@ class TakeoffController:
                 )
                 return True
 
-        logger.error(f"Ascent timeout ({self._max_ascent_time:.0f}s) — "
-                     f"last alt={state.altitude:.2f}m" if (state := self._get_vio_state()) else "")
+        state = self._get_vio_state()
+        if state:
+            logger.error(f"Ascent timeout ({self._max_ascent_time:.0f}s) — "
+                         f"last alt={state.altitude:.2f}m")
+        else:
+            logger.error(f"Ascent timeout ({self._max_ascent_time:.0f}s) — no state")
         return False
 
     # ------------------------------------------------------------------ #

@@ -291,7 +291,16 @@ class ORBSLAM3Odom:
             while self._running:
                 rclpy.spin_once(node, timeout_sec=0.1)
         finally:
-            node.destroy_node()
+            try:
+                node.destroy_node()
+            except Exception:
+                pass
+            try:
+                import rclpy
+                if rclpy.ok():
+                    rclpy.shutdown()
+            except Exception:
+                pass
 
     def print_status(self):
         """Print current odometry status."""

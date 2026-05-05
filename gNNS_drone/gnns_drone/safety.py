@@ -49,10 +49,10 @@ class SafetyMonitor:
     """
 
     def __init__(self, bridge: MAVLinkBridge, odom: RTABMapOdom,
-                 geofence_radius: float = 100.0,
-                 min_battery_pct: float = 20.0,
+                 geofence_radius: float = 1500.0,
+                 min_battery_pct: float = 15.0,
                  min_odom_confidence: int = 15,
-                 max_altitude: float = 10.0,
+                 max_altitude: float = 20.0,
                  vio_lost_action: str = "LAND",
                  vio_algo=None,
                  lidar=None):

@@ -6,7 +6,7 @@ GPS to Local NED coordinate conversion functions.
 
 import math
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 EARTH_RADIUS_M = 6371000.0
 
@@ -88,7 +88,7 @@ class WaypointManager:
     """Manages GPS waypoints and their NED equivalents."""
 
     def __init__(self):
-        self.home: GPSCoord | None = None
+        self.home: Optional[GPSCoord] = None
         self.waypoints_gps: List[GPSCoord] = []
         self.waypoints_ned: List[NEDCoord] = []
 

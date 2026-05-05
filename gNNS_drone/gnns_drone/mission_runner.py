@@ -118,7 +118,7 @@ class MissionRunner:
             self.bridge.land()
         except Exception:
             pass
-        sys.exit(1)
+        # Do NOT sys.exit() here — let the main loop's finally block run
 
     # ==============================================================
     # COORDINATE INPUT
@@ -180,6 +180,16 @@ class MissionRunner:
                 print("    Invalid! Use: LAT,LON")
 
         self.waypoints.print_mission_summary()
+
+        # Competition sanity check
+        total_dist = self.waypoints.total_mission_distance()
+        est_flight_time = total_dist / self.config.cruise_max_speed + self.waypoints.count * 10
+        print(f"\n  Estimated flight distance: {total_dist:.0f}m")
+        print(f"  Estimated flight time:     {est_flight_time:.0f}s ({est_flight_time/60:.1f}min)")
+        if total_dist > 1200:
+            print(f"  WARNING: Mission >1200m. VIO drift will degrade landing accuracy.")
+        if est_flight_time > 900:
+            print(f"  WARNING: Estimated flight time >15 min. Check battery capacity.")
 
         confirm = input("\n  Start mission? (y/n): ").strip().lower()
         if confirm != 'y':
@@ -380,7 +390,7 @@ class MissionRunner:
         time.sleep(GROUND_WAIT_TIME)
 
         # ---- TAKEOFF for next ----
-        if index < self.waypoints.count - 1 or True:  # Always takeoff (RTH)
+        if index < self.waypoints.count - 1:
             logger.info("  Takeoff...")
             self.bridge.set_mode("GUIDED")
             time.sleep(0.5)

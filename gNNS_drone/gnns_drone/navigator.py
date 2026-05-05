@@ -241,8 +241,9 @@ class Navigator:
         if not self._fly_to_waypoint(home_ned):
             logger.warning("RTH navigation failed, landing at current position")
             self.bridge.land()
-
-        self.lander.execute(0, 0)
+            self.bridge.wait_landed(timeout=30)
+        else:
+            self.lander.execute(0, 0)
 
         logger.info(f"\n  MISSION COMPLETE!")
         logger.info(f"  Waypoints: {self.waypoints_completed}/{self.waypoints.count}")
@@ -262,7 +263,7 @@ class Navigator:
     def _fly_to_waypoint(self, target: NEDCoord, timeout: float = 120) -> bool:
         """
         Fly to a waypoint using PID control with acceleration limiting.
-        
+
         Improvements:
           - Per-axis PID (not single Kp*error)
           - Velocity ramp-down near target (smooth deceleration)
@@ -272,11 +273,13 @@ class Navigator:
         logger.info(f"Flying to ({target.north:.1f}, {target.east:.1f})...")
         start = time.time()
         last_log = 0
+        dt = 0.05  # 20 Hz control loop
 
         while time.time() - start < timeout:
             if not self._mission_active:
                 return False
 
+            loop_start = time.time()
             data = self.odom.get()
 
             # Check arrival
@@ -290,18 +293,18 @@ class Navigator:
                     data = self.odom.get()
                     result = self.fc.compute_waypoint_velocity(
                         target.north, target.east, self.config.cruise_altitude,
-                        data.x, data.y, data.altitude
+                        data.x, data.y, data.altitude, dt=dt
                     )
                     vx, vy, vz = result[0], result[1], result[2]
                     self.bridge.send_velocity_ned(vx * 0.5, vy * 0.5, vz)
-                    time.sleep(0.05)
+                    time.sleep(dt)
                 self.bridge.send_velocity_ned(0, 0, 0)
                 return True
 
             # PID + acceleration-limited velocity command
             result = self.fc.compute_waypoint_velocity(
                 target.north, target.east, self.config.cruise_altitude,
-                data.x, data.y, data.altitude
+                data.x, data.y, data.altitude, dt=dt
             )
             vx, vy, vz = result[0], result[1], result[2]
             yaw = result[3] if len(result) > 3 else 0.0
@@ -318,7 +321,10 @@ class Navigator:
                 )
                 last_log = now
 
-            time.sleep(0.05)  # 20 Hz control loop
+            # Maintain precise 20 Hz
+            sleep_t = dt - (time.time() - loop_start)
+            if sleep_t > 0:
+                time.sleep(sleep_t)
 
         logger.warning("Fly-to-waypoint timeout!")
         return False

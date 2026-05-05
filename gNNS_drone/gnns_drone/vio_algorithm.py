@@ -876,8 +876,16 @@ class VIOEKF:
             F[3:6, 6:9]  = -R @ _skew(result.delta_v)
             # dv/d_ba
             F[3:6, 10:13] = -R * dt
-            # d_phi/d_bg
-            F[6:9, 13:16] = -np.eye(3) * dt
+            # d_phi/d_bg  (proper 4x3 quaternion Jacobian)
+            # For q = [w,x,y,z], G = [[-x,-y,-z], [w,-z,y], [z,w,-x], [-y,x,w]]
+            q = self.x[6:10]
+            G = np.array([
+                [-q[1], -q[2], -q[3]],
+                [ q[0], -q[3],  q[2]],
+                [ q[3],  q[0], -q[1]],
+                [-q[2],  q[1],  q[0]],
+            ])
+            F[6:10, 13:16] = -0.5 * dt * G
 
             Q_scaled = self.Q.copy()
             Q_scaled[0:3,  0:3]   *= dt
@@ -896,25 +904,27 @@ class VIOEKF:
         """
         Update EKF with 3-D feature positions expressed in world (NED) frame.
 
-        Each point contributes an independent position observation
-        h(x) = p  (the drone centre, approximated).
-        We use the centroid of all inlier 3-D points as a position pseudo-obs.
+        NOTE: Centroid-of-features is NOT the drone position (features are
+        typically in front of the camera). Using it directly as h(x)=p injects
+        a forward bias. Disabled until a proper PnP or reprojection residual
+        update is implemented. The EKF still gets corrections from optical-flow
+        velocity, LiDAR altitude, and RTABMap pose.
 
         Args:
             pts3d_world: (M, 3) float32 world-frame 3-D positions.
         """
-        if len(pts3d_world) < 4:
-            return
+        # DISABLED — see note above.
+        # Proper visual update requires solving PnP or using reprojection
+        # residuals, not assuming centroid == drone position.
+        return
 
-        with self._lock:
-            # Use centroid as a proxy position measurement
-            obs = np.mean(pts3d_world, axis=0)
-            # Measurement model: h(x) = p + R @ mean_cam_offset ≈ p
-            H = np.zeros((3, self.N))
-            H[0:3, 0:3] = np.eye(3)
+        # The previous (buggy) implementation was:
+        #   obs = np.mean(pts3d_world, axis=0)
+        #   H[0:3, 0:3] = np.eye(3)
+        # which wrongly treated the scene centroid as the drone position.
 
-            R_meas = np.eye(3) * (self._R_vis ** 2 / len(pts3d_world))
-            self._update(obs, H, R_meas)
+        # If you need a weak position correction here, implement a
+        # structure-from-motion keyframe update instead.
 
     # ------------------------------------------------------------------ #
     # Update: optical flow velocity
