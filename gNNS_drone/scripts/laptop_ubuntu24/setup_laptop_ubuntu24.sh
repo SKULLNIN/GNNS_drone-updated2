@@ -226,24 +226,34 @@ create_venvs() {
 # 5. librealsense (RealSense D435i / D455)
 # ===========================================================================
 install_librealsense() {
-  log "Installing Intel librealsense2"
-  local keyring="/etc/apt/keyrings/librealsense.gpg"
+  log "Installing Intel librealsense2 (RealSenseAI apt repo)"
+  # Official packages and signing key moved from librealsense.intel.com to
+  # librealsense.realsenseai.com. The old Intel URL can break apt (NO_PUBKEY
+  # FB0B24895113F120) and block all later apt-get update steps — see:
+  # https://github.com/realsenseai/librealsense/blob/master/doc/distribution_linux.md
+  local keyring="/etc/apt/keyrings/librealsenseai.gpg"
   local listfile="/etc/apt/sources.list.d/librealsense.list"
   $SUDO mkdir -p /etc/apt/keyrings
-  if [[ ! -f "$keyring" ]]; then
-    if ! curl -fsSL https://librealsense.intel.com/Debian/librealsense.pgp \
-         | $SUDO gpg --dearmor -o "$keyring"; then
-      warn "Could not fetch librealsense signing key — skipping apt repo."
-      warn "Build from source: https://github.com/IntelRealSense/librealsense"
-      return 0
-    fi
+
+  if [[ -f "$listfile" ]] && grep -q "librealsense.intel.com" "$listfile" 2>/dev/null; then
+    warn "Removing legacy librealsense.intel.com apt source (incompatible GPG key)."
+    $SUDO rm -f "$listfile"
   fi
-  if [[ ! -f "$listfile" ]]; then
-    # Intel currently ships builds for older codenames; pin to 'jammy' which
-    # works on 24.04 too. If/when 'noble' is published this can be relaxed.
-    echo "deb [signed-by=$keyring] https://librealsense.intel.com/Debian/apt-repo jammy main" \
-      | $SUDO tee "$listfile" >/dev/null
+  # Orphan key from old instructions
+  [[ -f /etc/apt/keyrings/librealsense.gpg ]] && $SUDO rm -f /etc/apt/keyrings/librealsense.gpg
+
+  if ! curl -fsSL https://librealsense.realsenseai.com/Debian/librealsenseai.asc \
+       | $SUDO gpg --dearmor -o "$keyring"; then
+    warn "Could not fetch librealsenseai signing key — skipping apt repo."
+    warn "Build from source: https://github.com/IntelRealSense/librealsense"
+    return 0
   fi
+
+  local codename
+  codename="$(lsb_release -cs 2>/dev/null || echo noble)"
+  echo "deb [signed-by=$keyring] https://librealsense.realsenseai.com/Debian/apt-repo ${codename} main" \
+    | $SUDO tee "$listfile" >/dev/null
+
   if ! $SUDO apt-get update -y; then
     warn "apt-get update failed after adding librealsense repo."
   fi
