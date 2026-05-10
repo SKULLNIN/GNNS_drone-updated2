@@ -10,7 +10,7 @@ connection:
   # Options:
   #   /dev/ttyTHS1  — Jetson Nano hardware UART (GPIO pins 8 & 10)
   #   /dev/ttyUSB0  — USB-to-Serial adapter
-  #   tcp:127.0.0.1:5762 — SITL simulation (for testing)
+  #   tcp:127.0.0.1:5760 — SITL simulation (for testing)
   #   udp:127.0.0.1:14550 — UDP connection
   port: "/dev/ttyTHS1"
   baudrate: 921600
@@ -20,14 +20,16 @@ connection:
   # Companion computer should be system=1, component=191 (MAV_COMP_ID_ONBOARD_COMPUTER)
   source_system: 1
   source_component: 191
+  # NOTE: target_system and target_component are stored but not actively used
+  #       by mavlink_bridge.py (pymavlink defaults to system=1, comp=1).
   target_system: 1
   target_component: 1
 
   # Connection health
-  heartbeat_interval_s: 1.0     # Send heartbeat every 1 second
-  heartbeat_timeout_s: 5.0      # If no FC heartbeat for 5s → connection lost
-  reconnect_attempts: 5         # Number of reconnect attempts before failsafe
-  reconnect_delay_s: 2.0        # Delay between reconnect attempts
+  heartbeat_interval_s: 1.0     # Send companion heartbeat every N seconds
+  heartbeat_timeout_s: 5.0      # If no FC heartbeat for 5s → is_connected = False
+  reconnect_attempts: 5         # Retry connect() up to N times before giving up
+  reconnect_delay_s: 2.0        # Seconds to wait between each retry
 
 # ============================================================
 # Message send rates (Hz)
@@ -75,10 +77,4 @@ debug:
   log_ekf_status: true          # Log EKF health changes
   log_vio_drops: true           # Log when VIO messages are rejected by EKF
   
-  # Message timing diagnostics
-  measure_latency: true         # Measure round-trip latency periodically
-  latency_interval_s: 10.0      # How often to measure latency
-  
-  # Log file
-  log_file: "logs/mavlink_{timestamp}.log"
-  log_level: "DEBUG"            # TRACE, DEBUG, INFO, WARN, ERROR
+  log_level: "DEBUG"            # DEBUG, INFO, WARN, ERROR

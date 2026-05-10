@@ -252,7 +252,8 @@ class ORBSLAM3Odom:
                     yaw = math.atan2(siny, cosy)
 
                     pos_cov = msg.pose.covariance[0] if len(msg.pose.covariance) > 0 else 0
-                    confidence = max(0, min(100, int(100 - pos_cov * 100)))
+                    # Monotonic mapping: high covariance → low confidence, never 0
+                    confidence = max(0, min(100, int(100.0 / (1.0 + pos_cov))))
 
                     timestamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
 

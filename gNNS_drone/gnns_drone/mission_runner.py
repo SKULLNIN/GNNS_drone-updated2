@@ -73,14 +73,11 @@ class MissionRunner:
     ):
         self.sitl_mode = sitl_mode
 
-        # Load MAVLink config — override port for SITL
-        if sitl_mode and config_path is None:
-            # Use SITL TCP connection
-            self.bridge = MAVLinkBridge()
+        # Load MAVLink config — override port for SITL unconditionally
+        self.bridge = MAVLinkBridge(config_path)
+        if sitl_mode:
             self.bridge.config["connection"]["port"] = "tcp:127.0.0.1:5760"
             self.bridge.config["connection"]["sitl_mode"] = True
-        else:
-            self.bridge = MAVLinkBridge(config_path)
 
         # Flight controller (PID + velocity smoothing)
         fc_config_path = str(Path(__file__).parent.parent / "config" / "flight_config.yaml")
@@ -165,10 +162,13 @@ class MissionRunner:
                 break
 
             if wp_input == 'demo':
-                for wp in DEMO_WAYPOINTS:
+                remaining = 5 - count
+                added = 0
+                for wp in DEMO_WAYPOINTS[:remaining]:
                     ned = self.waypoints.add_waypoint(wp)
                     count += 1
-                print(f"  Added 5 demo waypoints")
+                    added += 1
+                print(f"  Added {added} demo waypoints")
                 break
 
             try:
@@ -323,7 +323,8 @@ class MissionRunner:
         if self.sitl_mode:
             self.bridge.request_all_streams(10)
             time.sleep(2)
-            self.bridge.wait_ekf_ready(timeout=60)
+            if not self.bridge.wait_ekf_ready(timeout=60):
+                logger.warning("EKF not ready in SITL — proceeding with caution")
         else:
             self.bridge.configure_message_rates()
 
@@ -713,9 +714,11 @@ def main():
                         help="Interactive mode: takeoff, then enter coordinates live")
     parser.add_argument("--vio-source", "--camera", dest="vio_source",
                         default=None,
-                        choices=["ros2", "orbslam3", "t265_raw", "simulated"],
-                        help="Odometry source: ros2=RTAB-Map, orbslam3=ORB-SLAM3, "
-                             "t265_raw, simulated (default from vio_config)")
+                        choices=["ros2", "rtabmap", "orbslam3", "t265_raw",
+                                 "simulated", "voxl"],
+                        help="Odometry source: ros2/rtabmap=RTAB-Map, "
+                             "orbslam3=ORB-SLAM3, t265_raw, simulated, voxl "
+                             "(default from vio_config.yaml odom_source)")
     args = parser.parse_args()
 
     logging.basicConfig(

@@ -105,9 +105,10 @@ class DroneScanner:
         if self.sitl_mode:
             self.bridge.request_all_streams(10)
             time.sleep(2)
-            self.bridge.wait_ekf_ready(timeout=60)
+            if not self.bridge.wait_ekf_ready(timeout=60):
+                logger.warning("[CHECKPOINT 2] EKF not ready — proceeding with caution")
         
-        logger.info("[CHECKPOINT 2] EKF Ready. Starting Odometry...")
+        logger.info("[CHECKPOINT 2] Starting Odometry...")
         self.odom.start()
         time.sleep(1)
 

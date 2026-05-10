@@ -294,12 +294,24 @@ class RTABMapOdom:
                 logger.warning("Odometry thread did not stop cleanly within 5 s")
         logger.info("Odometry stopped")
 
-    def _update_odom(self, x, y, z, roll, pitch, yaw, 
+    def _update_odom(self, x, y, z, roll, pitch, yaw,
                      timestamp, confidence=90, features=0, inliers=0,
-                     loop_closure_id=-1):
-        """Internal: update odometry with new pose and compute derivatives."""
-        # Compute velocity and acceleration
-        vx, vy, vz, ax, ay, az = self._vel_estimator.update(x, y, z, timestamp)
+                     loop_closure_id=-1, vx=None, vy=None, vz=None):
+        """
+        Internal: update odometry with new pose and compute derivatives.
+
+        When ``vx``/``vy``/``vz`` are supplied (e.g. SITL ground-truth),
+        they bypass the velocity estimator so the estimator never overwrites
+        the authoritative values.
+        """
+        if vx is None:
+            # Derive all three velocity components from position history
+            vx, vy, vz, ax, ay, az = self._vel_estimator.update(x, y, z, timestamp)
+        else:
+            # Caller provides ground-truth velocity — still update estimator
+            # state so derivatives stay consistent if caller later stops
+            # providing them, but discard the estimator's velocity output.
+            _, _, _, ax, ay, az = self._vel_estimator.update(x, y, z, timestamp)
 
         # Track total distance
         dist = math.sqrt(
@@ -388,15 +400,30 @@ class RTABMapOdom:
 
         odom_topic = self.config.get("odom_topic", "/odom")
         info_topic = self.config.get("rtabmap_info_topic", "/rtabmap/info")
+        frame_convention = self.config.get("odom_frame_convention", "ros_enu_to_ned")
+        if frame_convention not in ("ros_enu_to_ned", "identity"):
+            logger.warning(
+                f"Unknown odom_frame_convention '{frame_convention}', "
+                "falling back to 'ros_enu_to_ned'. "
+                "Valid values: ros_enu_to_ned, identity."
+            )
+            frame_convention = "ros_enu_to_ned"
+        logger.info(f"Frame convention: {frame_convention}")
 
         try:
             def odom_callback(msg: Odometry):
                 """Process odometry from RTAB-Map."""
                 try:
                     pos = msg.pose.pose.position
-                    north = pos.y
-                    east = pos.x
-                    down = -pos.z
+                    if frame_convention == "ros_enu_to_ned":
+                        # ROS uses ENU (x=East, y=North, z=Up); convert to NED.
+                        north = pos.y
+                        east = pos.x
+                        down = -pos.z
+                    else:  # identity — caller guarantees NED-aligned topics
+                        north = pos.x
+                        east = pos.y
+                        down = pos.z
 
                     q = msg.pose.pose.orientation
                     sinr = 2.0 * (q.w * q.x + q.y * q.z)
@@ -412,7 +439,8 @@ class RTABMapOdom:
                     yaw = math.atan2(siny, cosy)
 
                     pos_cov = msg.pose.covariance[0]
-                    confidence = max(0, min(100, int(100 - pos_cov * 100)))
+                    # Monotonic mapping: high covariance → low confidence, never 0
+                    confidence = max(0, min(100, int(100.0 / (1.0 + pos_cov))))
 
                     timestamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
 
@@ -554,28 +582,25 @@ class RTABMapOdom:
                 north = pos.x
                 east = pos.y
                 down = pos.z  # Already NED
-                
+
                 roll = att.roll if att else 0
                 pitch = att.pitch if att else 0
                 yaw = att.yaw if att else 0
-                
+
+                # Pass SITL ground-truth velocity directly so the estimator
+                # never overwrites it with noisier position-derived values.
                 self._update_odom(
                     north, east, down, roll, pitch, yaw,
-                    time.time(), confidence=95
+                    time.time(), confidence=95,
+                    vx=pos.vx, vy=pos.vy, vz=pos.vz,
                 )
-                
+
                 # Update angular rates from ATTITUDE message
                 if att:
                     with self._odom_lock:
                         self._odom.roll_rate = att.rollspeed if hasattr(att, 'rollspeed') else 0
                         self._odom.pitch_rate = att.pitchspeed if hasattr(att, 'pitchspeed') else 0
                         self._odom.yaw_rate = att.yawspeed if hasattr(att, 'yawspeed') else 0
-                
-                # Use ground-truth velocity from SITL (much better than noisy derivatives)
-                with self._odom_lock:
-                    self._odom.vx = pos.vx
-                    self._odom.vy = pos.vy
-                    self._odom.vz = pos.vz
             
             time.sleep(1.0 / 50)  # 50 Hz for tight PID control
 
@@ -628,7 +653,8 @@ class RTABMapOdom:
 
                 # Derive confidence from covariance diagonal
                 pos_var   = float(np.mean(np.diag(cov6[:3, :3])))
-                confidence = max(0, min(100, int(100 - pos_var * 1000)))
+                # Monotonic mapping: high variance → low confidence, never 0
+                confidence = max(0, min(100, int(100.0 / (1.0 + pos_var * 100.0))))
 
                 quality   = client.get_quality()
                 if quality > 0:

@@ -74,7 +74,7 @@ tmux attach -t drone          # everything still running
 ## 3. One-Time Jetson Installation
 
 ```bash
-cd ~/gNNS_drone
+cd ~/gNNS_drone/gNNS_drone   # inner project root — contains requirements.txt and scripts/
 
 # Python deps + serial port
 chmod +x scripts/jetson_nano/setup_jetson_nano.sh
@@ -135,7 +135,7 @@ Use two terminals on the **Jetson**, then RViz on the **laptop**. Topic prefix i
 
 ```bash
 # On Jetson — terminal 1
-cd ~/gNNS_drone
+cd ~/gNNS_drone/gNNS_drone
 chmod +x scripts/jetson_nano/d455_launch.sh scripts/jetson_nano/rtabmap_vio.sh
 ./scripts/jetson_nano/d455_launch.sh
 
@@ -143,7 +143,7 @@ chmod +x scripts/jetson_nano/d455_launch.sh scripts/jetson_nano/rtabmap_vio.sh
 ./scripts/jetson_nano/rtabmap_vio.sh
 
 # On laptop
-cd ~/gNNS_drone
+cd ~/gNNS_drone/gNNS_drone
 chmod +x scripts/jetson_nano/laptop_rviz2.sh scripts/jetson_nano/verify_bridge.sh
 ./scripts/jetson_nano/verify_bridge.sh
 ./scripts/jetson_nano/laptop_rviz2.sh 42
@@ -160,7 +160,7 @@ RViz loads [`config/drone_monitor.rviz`](../config/drone_monitor.rviz) when pres
 ### Full mission (camera + VIO + gNNS flight)
 
 ```bash
-cd ~/gNNS_drone
+cd ~/gNNS_drone/gNNS_drone
 ./scripts/jetson_nano/ros_bridge.sh --imu
 ```
 
@@ -378,7 +378,7 @@ Forward MAVLink from the Jetson to the laptop for a flight HUD:
 
 ```bash
 # === JETSON (simple) ===
-cd ~/gNNS_drone
+cd ~/gNNS_drone/gNNS_drone
 ./scripts/jetson_nano/d455_launch.sh      # terminal 1
 ./scripts/jetson_nano/rtabmap_vio.sh      # terminal 2
 
@@ -386,7 +386,7 @@ cd ~/gNNS_drone
 ./scripts/jetson_nano/ros_bridge.sh --viz-only --imu --pointcloud
 
 # === LAPTOP ===
-cd ~/gNNS_drone
+cd ~/gNNS_drone/gNNS_drone
 chmod +x scripts/jetson_nano/laptop_rviz2.sh scripts/jetson_nano/verify_bridge.sh
 ./scripts/jetson_nano/verify_bridge.sh
 ./scripts/jetson_nano/laptop_rviz2.sh 42

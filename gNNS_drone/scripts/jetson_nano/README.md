@@ -72,11 +72,12 @@ You can run from any directory; the script switches to the project root automati
 
 2. **Install dependencies:**
    ```bash
-   cd ~/gNNS_drone
+   cd ~/gNNS_drone/gNNS_drone   # inner project root
    ./scripts/jetson_nano/setup_jetson_nano.sh
    ```
    Or manually:
    ```bash
+   cd ~/gNNS_drone/gNNS_drone
    pip3 install -r requirements.txt
    ```
 

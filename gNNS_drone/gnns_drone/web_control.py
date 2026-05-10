@@ -75,7 +75,8 @@ class DroneController:
         if self.sitl_mode:
             self.bridge.request_all_streams(10)
             time.sleep(2)
-            self.bridge.wait_ekf_ready(timeout=60)
+            if not self.bridge.wait_ekf_ready(timeout=60):
+                logger.warning("EKF not ready in SITL — proceeding with caution")
 
         self.odom.start()
         time.sleep(2)

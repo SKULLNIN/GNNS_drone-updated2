@@ -62,7 +62,7 @@ logger = logging.getLogger("sim_test")
 # =================================================================
 SITL_CONFIG = {
     "connection": {
-        "port": "tcp:127.0.0.1:5762",   # SITL default port
+        "port": "tcp:127.0.0.1:5760",   # SITL default port
         "baudrate": 921600,
         "source_system": 1,
         "source_component": 191,
@@ -96,11 +96,6 @@ def test_connect():
     print("  TEST 1: BASIC CONNECTION")
     print("=" * 60)
 
-    bridge = MAVLinkBridge.__new__(MAVLinkBridge)
-    bridge.config = SITL_CONFIG
-    bridge.conn = None
-    bridge.stats = bridge.__class__.__dict__  # Will be overwritten
-    # Re-init properly
     bridge = MAVLinkBridge()
     bridge.config = SITL_CONFIG
 

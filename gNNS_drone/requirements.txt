@@ -12,7 +12,9 @@
 #   - rclpy (ROS2): NOT installable via pip; install via apt/ros2 distro.
 # ============================================================
 
-# Core MAVLink communication
+# Core MAVLink communication.
+# Minimum 2.4.40 required — earlier builds lack the covariance parameter on
+# vision_position_estimate_send(), which we now always pass unconditionally.
 pymavlink>=2.4.40
 
 # RealSense camera SDK

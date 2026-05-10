@@ -276,7 +276,7 @@ Or use `ros_bridge.sh` which handles steps 1-3 automatically:
 ### Option A: One-command launcher
 
 ```bash
-cd ~/gNNS_drone
+cd ~/gNNS_drone/gNNS_drone    # inner project root
 ./scripts/jetson_nano/run_mission.sh
 ```
 
@@ -285,7 +285,7 @@ This runs `python -m gnns_drone` with `PYTHONPATH` set correctly.
 ### Option B: Direct Python
 
 ```bash
-cd ~/gNNS_drone
+cd ~/gNNS_drone/gNNS_drone
 python3 -m gnns_drone
 ```
 

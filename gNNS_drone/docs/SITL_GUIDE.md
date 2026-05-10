@@ -27,7 +27,7 @@ Tools/environment_install/install-prereqs-ubuntu.sh -y
 ### Python dependencies
 
 ```bash
-cd ~/gNNS_drone
+cd ~/gNNS_drone/gNNS_drone   # inner project root — contains requirements.txt
 pip install -r requirements.txt
 ```
 
@@ -62,7 +62,7 @@ internally; our code overrides this with `--sitl` flag which uses SITL's
 ### Demo mission (5 waypoints, fully automatic)
 
 ```bash
-cd ~/gNNS_drone
+cd ~/gNNS_drone/gNNS_drone
 python3 -m gnns_drone --sitl --demo
 ```
 
@@ -151,7 +151,7 @@ Located in the `sitl/` directory. Each can be run standalone.
 Basic smoke test: connect, arm, takeoff, hover, land.
 
 ```bash
-cd ~/gNNS_drone
+cd ~/gNNS_drone/gNNS_drone
 python3 sitl/quick_flight_test.py
 ```
 
@@ -265,7 +265,7 @@ This reads the default Gazebo `iris_with_ardupilot` model and injects:
 ### 7.3 Start full simulation
 
 ```bash
-cd ~/gNNS_drone
+cd ~/gNNS_drone/gNNS_drone
 chmod +x start_simulation.sh
 ./start_simulation.sh
 ```
@@ -300,7 +300,7 @@ param load sitl/depth_camera_params.parm
 ```
 Terminal 1                          Terminal 2
 ──────────                          ──────────
-cd ~/ardupilot                      cd ~/gNNS_drone
+cd ~/ardupilot                      cd ~/gNNS_drone/gNNS_drone
 sim_vehicle.py -v ArduCopter \
   --no-mavproxy
                                     # Wait until SITL shows "EKF3 IMU0"

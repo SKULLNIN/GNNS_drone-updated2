@@ -38,19 +38,12 @@ vio:
     color_fps: 30
     enable_imu: true               # D435i has built-in IMU
     
-  # Coordinate frame transformation
-  # Camera frame → NED frame mapping
-  # T265: x_right, y_down, z_backward → NED: x_north, y_east, z_down
-  # Depends on how camera is mounted on the drone
-  transform:
-    # If camera faces FORWARD (default):
-    x_axis: "-z"    # Camera's -Z (backward) = NED's +X (forward/north)
-    y_axis: "x"     # Camera's +X (right) = NED's +Y (east)
-    z_axis: "y"     # Camera's +Y (down) = NED's +Z (down)
-    
   # Tracking quality thresholds
+  # NOTE: min_confidence is NOT read from here — the active gate is
+  #       min_odom_confidence in config/flight_config.yaml (default 30).
+  #       Keep this section as documentation only.
   thresholds:
-    min_confidence: 30            # Below this → DEGRADED status
+    min_confidence: 30            # Reference only — see flight_config.yaml
     critical_confidence: 10       # Below this → LOST status, trigger failsafe
     min_features: 50              # Minimum visual features for reliable tracking
     max_velocity: 5.0             # m/s — above this VIO may lose tracking

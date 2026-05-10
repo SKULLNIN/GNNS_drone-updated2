@@ -78,7 +78,7 @@ class LinkStats:
         self.messages_sent = 0
         self.messages_received = 0
         self.msg_drops = 0
-        self.last_heartbeat_time = 0.0
+        self.last_heartbeat_time = -float('inf')
         self.latency_ms = -1.0
         self.connected = False
         self.fc_armed = False
@@ -160,7 +160,7 @@ class MAVLinkBridge:
             else:
                 logger.warning(
                     f"mavlink_config.yaml not found at {default}. "
-                    "Falling back to SITL defaults (tcp:127.0.0.1:5762). "
+                    "Falling back to SITL defaults (tcp:127.0.0.1:5760). "
                     "For real hardware, create config/mavlink_config.yaml with your serial port."
                 )
                 return self._default_config()
@@ -173,7 +173,7 @@ class MAVLinkBridge:
     def _default_config(self) -> dict:
         return {
             "connection": {
-                "port": "tcp:127.0.0.1:5762",
+                "port": "tcp:127.0.0.1:5760",
                 "baudrate": 921600,
                 "source_system": 1,
                 "source_component": 191,
@@ -203,25 +203,39 @@ class MAVLinkBridge:
     # ==============================================================
 
     def connect(self) -> bool:
-        """Establish MAVLink connection to flight controller."""
+        """
+        Establish MAVLink connection to flight controller.
+
+        Retries up to ``reconnect_attempts`` times (config key) with
+        ``reconnect_delay_s`` seconds between each attempt.
+        """
         conn_cfg = self.config["connection"]
         port = conn_cfg["port"]
         baud = conn_cfg.get("baudrate", 921600)
+        attempts = max(1, int(conn_cfg.get("reconnect_attempts", 1)))
+        delay_s = float(conn_cfg.get("reconnect_delay_s", 2.0))
 
-        logger.info(f"Connecting to FC: {port} @ {baud} baud...")
+        for attempt in range(attempts):
+            if attempt > 0:
+                logger.info(f"Reconnect attempt {attempt + 1}/{attempts} "
+                            f"(waiting {delay_s}s)...")
+                time.sleep(delay_s)
 
-        try:
-            self.conn = mavutil.mavlink_connection(
-                port,
-                baud=baud,
-                source_system=conn_cfg.get("source_system", 1),
-                source_component=conn_cfg.get("source_component", 191),
-            )
-            logger.info("MAVLink connection object created")
-            return True
-        except Exception as e:
-            logger.error(f"Connection failed: {e}")
-            return False
+            logger.info(f"Connecting to FC: {port} @ {baud} baud "
+                        f"(attempt {attempt + 1}/{attempts})...")
+            try:
+                self.conn = mavutil.mavlink_connection(
+                    port,
+                    baud=baud,
+                    source_system=conn_cfg.get("source_system", 1),
+                    source_component=conn_cfg.get("source_component", 191),
+                )
+                logger.info("MAVLink connection object created")
+                return True
+            except Exception as e:
+                logger.error(f"Connection failed: {e}")
+
+        return False
 
     def wait_for_heartbeat(self, timeout: float = 30.0) -> bool:
         """Wait for heartbeat from FC. Returns True if received."""
@@ -254,6 +268,7 @@ class MAVLinkBridge:
             self._heartbeat_thread.join(timeout=2.0)
         if self.conn:
             self._conn().close()
+        self.stats.connected = False
         logger.info("Disconnected from FC")
 
     def _start_heartbeat_thread(self):
@@ -265,13 +280,20 @@ class MAVLinkBridge:
         logger.debug("Heartbeat thread started (1 Hz)")
 
     def _heartbeat_loop(self):
-        """Send companion heartbeat at 1 Hz — required by ArduPilot."""
+        """Send companion heartbeat at the configured rate — required by ArduPilot."""
+        interval = float(
+            self.config.get("connection", {}).get("heartbeat_interval_s", 1.0)
+        )
         while self._running:
             try:
                 self.send_heartbeat()
+            except (OSError, ConnectionResetError) as e:
+                if self._running:
+                    logger.warning(f"Heartbeat send error (connection closing): {e}")
+                break
             except Exception as e:
                 logger.error(f"Heartbeat send error: {e}")
-            time.sleep(1.0)
+            time.sleep(interval)
 
     # ==============================================================
     # MESSAGE RECEIVE LOOP
@@ -314,6 +336,7 @@ class MAVLinkBridge:
 
                 # Handle heartbeat
                 if msg_type == "HEARTBEAT":
+                    self.stats.connected = True
                     self.stats.last_heartbeat_time = time.time()
                     self.stats.fc_armed = bool(
                         msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED
@@ -374,6 +397,11 @@ class MAVLinkBridge:
                         except Exception as e:
                             logger.error(f"Callback error for {msg_type}: {e}")
 
+            except (ConnectionResetError, OSError) as e:
+                if not self._running:
+                    break
+                logger.warning(f"Recv connection error: {e}")
+                time.sleep(0.5)
             except Exception as e:
                 logger.error(f"Recv error: {e}")
                 time.sleep(0.1)
@@ -465,16 +493,13 @@ class MAVLinkBridge:
                 return
             covariance = vision_position_covariance_6dof(pos_variance_m2)
 
-        usec = int(time.time() * 1e6)
-
-        if covariance and len(covariance) == 21:
-            self._conn().mav.vision_position_estimate_send(
-                usec, x, y, z, roll, pitch, yaw, covariance
-            )
-        else:
-            self._conn().mav.vision_position_estimate_send(
-                usec, x, y, z, roll, pitch, yaw
-            )
+        # usec=0 lets the FC stamp on receipt, avoiding wall-clock/boot-time mismatch.
+        # Always pass a 21-element covariance; pymavlink>=2.4.40 (pinned in
+        # requirements.txt) guarantees the covariance parameter exists.
+        cov = covariance if (covariance and len(covariance) == 21) else [0.0] * 21
+        self._conn().mav.vision_position_estimate_send(
+            0, x, y, z, roll, pitch, yaw, cov
+        )
         self.stats.messages_sent += 1
 
     def send_vision_speed(self, vx: float, vy: float, vz: float):
@@ -482,7 +507,8 @@ class MAVLinkBridge:
         if not _is_finite(vx, vy, vz):
             logger.warning("NaN/Inf in vision speed! Skipping send.")
             return
-        usec = int(time.time() * 1e6)
+        # usec=0 lets the FC stamp on receipt
+        usec = 0
         self._conn().mav.vision_speed_estimate_send(usec, vx, vy, vz)
         self.stats.messages_sent += 1
 
@@ -649,12 +675,14 @@ class MAVLinkBridge:
                      f"tolerance={tolerance}m timeout={timeout}s")
         start = time.time()
         last_send = 0
+        last_log = 0
 
         while time.time() - start < timeout:
             # Resend command periodically
-            if time.time() - last_send > resend_interval:
+            now = time.time()
+            if now - last_send > resend_interval:
                 self.goto_position_ned(north, east, down)
-                last_send = time.time()
+                last_send = now
 
             # Check position
             pos = self.get_latest("LOCAL_POSITION_NED")
@@ -664,9 +692,10 @@ class MAVLinkBridge:
                     logger.info(f"Arrived! Distance: {dist:.2f}m")
                     return True
 
-                if int(time.time()) % 5 == 0:  # Log every 5 seconds
+                if now - last_log > 5.0:  # Log every 5 seconds
                     logger.debug(f"  En route — dist={dist:.1f}m, "
                                   f"pos=({pos.x:.1f}, {pos.y:.1f})")
+                    last_log = now
 
             time.sleep(0.2)
 
@@ -700,8 +729,9 @@ class MAVLinkBridge:
             increment_deg: Angular increment between sectors
             angle_offset: Starting angle offset in degrees
         """
+        # time_usec=0 lets the FC stamp on receipt
         self._conn().mav.obstacle_distance_send(
-            int(time.time() * 1e6),
+            0,
             mavutil.mavlink.MAV_DISTANCE_SENSOR_LASER,
             distances_cm,
             increment_deg,
@@ -804,6 +834,8 @@ class MAVLinkBridge:
 
     @property
     def is_connected(self) -> bool:
+        if not self.stats.connected:
+            return False
         timeout = self.config["connection"].get("heartbeat_timeout_s", 5.0)
         return (time.time() - self.stats.last_heartbeat_time) < timeout
 
@@ -928,7 +960,8 @@ class MAVLinkBridge:
         if quality < 0 or quality > 255:
             quality = max(0, min(255, quality))
 
-        time_us = int(time.time() * 1e6) & 0xFFFFFFFF
+        # time_usec=0 lets the FC stamp on receipt; avoids 32-bit wraparound
+        time_us = 0
 
         self._conn().mav.optical_flow_rad_send(
             time_us,                  # time_usec
@@ -979,8 +1012,8 @@ class MAVLinkBridge:
                         return True
             time.sleep(1.0)
 
-        logger.warning(f"EKF timeout after {timeout}s — continuing anyway")
-        return True
+        logger.error(f"EKF timeout after {timeout}s — EKF not ready!")
+        return False
 
     @property
     def is_sitl(self) -> bool:

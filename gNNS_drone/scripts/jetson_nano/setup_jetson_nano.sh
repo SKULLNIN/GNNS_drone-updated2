@@ -33,7 +33,14 @@ echo ""
 echo "--- Python dependencies ---"
 if [ -f "requirements.txt" ]; then
   echo "  Installing from requirements.txt..."
-  pip3 install --user -r requirements.txt || true
+  if ! pip3 install --user -r requirements.txt; then
+    echo ""
+    echo "  ERROR: pip install failed. Check the output above."
+    echo "  On Jetson Nano, pyrealsense2 and opencv-contrib-python may need"
+    echo "  to be built from source (ARM64 wheels are not always available)."
+    echo "  See: https://github.com/IntelRealSense/librealsense/blob/master/doc/installation_jetson.md"
+    exit 1
+  fi
   echo "  Done. If you use a venv, activate it and run: pip install -r requirements.txt"
 else
   echo "  requirements.txt not found; skip pip install."
