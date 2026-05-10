@@ -236,7 +236,7 @@ class Diagnostics:
     # ==============================================================
 
     def check_vio_sensor(self) -> bool:
-        """Check if VIO camera is connected."""
+        """Check if VIO camera is connected, and verify IMU is accessible."""
         print("\n--- Checking VIO Sensor ---")
 
         try:
@@ -256,14 +256,57 @@ class Diagnostics:
                        "No RealSense camera detected — check USB connection")
             return False
 
-        for dev in devices:
-            name = dev.get_info(rs.camera_info.name)
-            serial = dev.get_info(rs.camera_info.serial_number)
-            fw = dev.get_info(rs.camera_info.firmware_version)
-            self._add(f"RealSense {name}", True,
-                       f"Connected (S/N: {serial}, FW: {fw})")
+        dev = devices[0]
+        name = dev.get_info(rs.camera_info.name)
+        serial = dev.get_info(rs.camera_info.serial_number)
+        fw = dev.get_info(rs.camera_info.firmware_version)
+        self._add(f"RealSense {name}", True,
+                   f"Connected (S/N: {serial}, FW: {fw})")
 
-        return True
+        # ------------------------------------------------------------------
+        # CRITICAL: IMU check (D435i/D455 must have accel+gyro accessible)
+        # ------------------------------------------------------------------
+        imu_ok = False
+        try:
+            sensors = dev.query_sensors()
+            motion_sensor = None
+            for s in sensors:
+                if s.is_motion_sensor():
+                    motion_sensor = s
+                    break
+
+            if motion_sensor is None:
+                self._add("RealSense IMU", False,
+                           "No motion sensor found! Check firmware / USB 3.0 connection")
+            else:
+                # Try opening a minimal IMU stream to verify HID access
+                try:
+                    import tempfile
+                    pipe_test = rs.pipeline(ctx)
+                    cfg_test = rs.config()
+                    cfg_test.enable_stream(rs.stream.accel, rs.format.motion_xyz32f, 200)
+                    cfg_test.enable_stream(rs.stream.gyro,  rs.format.motion_xyz32f, 200)
+                    prof_test = pipe_test.start(cfg_test)
+                    pipe_test.stop()
+                    self._add("RealSense IMU", True,
+                               "Accel + Gyro accessible (HID OK)")
+                    imu_ok = True
+                except Exception as e:
+                    err_str = str(e).lower()
+                    if "usb" in err_str or "bandwidth" in err_str:
+                        self._add("RealSense IMU", False,
+                                   f"IMU init failed — likely USB 2.0 (need USB 3.0): {e}")
+                    elif "hid" in err_str or "permission" in err_str:
+                        self._add("RealSense IMU", False,
+                                   f"IMU init failed — missing udev rules / HID permissions: {e}")
+                    else:
+                        self._add("RealSense IMU", False,
+                                   f"IMU init failed — {e}")
+        except Exception as e:
+            self._add("RealSense IMU", False,
+                       f"Could not query motion sensors: {e}")
+
+        return imu_ok
 
     # ==============================================================
     # CHECK: LIDAR

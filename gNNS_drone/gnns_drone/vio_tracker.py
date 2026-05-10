@@ -414,14 +414,33 @@ class VIOTracker:
             cfg.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
             # Depth stream aligned to color
             cfg.enable_stream(rs.stream.depth, 640, 480, rs.format.z16,  30)
-            # IMU streams
-            cfg.enable_stream(rs.stream.accel, rs.format.motion_xyz32f, 200)
-            cfg.enable_stream(rs.stream.gyro,  rs.format.motion_xyz32f, 200)
+
+            # IMU streams — try to add them, but don't fail if IMU is inaccessible
+            # (common on D455 with USB 2.0, missing udev rules, or old firmware)
+            imu_enabled = False
+            try:
+                cfg.enable_stream(rs.stream.accel, rs.format.motion_xyz32f, 200)
+                cfg.enable_stream(rs.stream.gyro,  rs.format.motion_xyz32f, 200)
+                imu_enabled = True
+            except Exception as e:
+                logger.error(
+                    f"IMU streams not available: {e}\n"
+                    "  → Common fixes:\n"
+                    "    1. Use USB 3.0 port (USB 2.0 = no IMU bandwidth)\n"
+                    "    2. Update firmware: realsense-viewer → Update Firmware\n"
+                    "    3. Install udev rules:\n"
+                    "       sudo cp config/99-realsense-libusb.rules /etc/udev/rules.d/\n"
+                    "       sudo udevadm control --reload-rules && sudo udevadm trigger\n"
+                    "    4. Check kernel module: lsmod | grep hid_sensor_custom\n"
+                    "  Continuing WITHOUT IMU — visual-only odometry (higher drift)."
+                )
 
             profile = pipe.start(cfg)
             device  = profile.get_device()
             logger.info(f"D455/D435i connected: {device.get_info(rs.camera_info.name)}")
             logger.info(f"  Serial: {device.get_info(rs.camera_info.serial_number)}")
+            if not imu_enabled:
+                logger.warning("  ⚠️  IMU DISABLED — flying without accel/gyro data")
 
             # Read depth scale
             depth_sensor  = device.first_depth_sensor()
