@@ -136,19 +136,17 @@ class VIOState:
     """High-level state of the VIO pipeline (mirrors MAVLink GNNS_VIO_STATUS)."""
 
     confidence: float = 0.0
-    """Composite confidence score 0–100.
+    """Composite confidence score 0–100 (see ``VIOAlgorithm._compute_confidence``).
 
-    Formula:
-      0.30 × clamp(num_inliers/200, 0, 1) × 100   # feature count
-    + 0.30 × tracking_ratio × 100                   # geometric inlier ratio
-    + 0.20 × (1 − clamp(pos_cov_norm, 0, 1)) × 100 # EKF uncertainty
-    + 0.10 × (1 if imu_dt < 0.04 else 0) × 100     # IMU rate health
-    + 0.10 × (1 if lidar_alt_m > 0 else 0) × 100   # LiDAR available
+    Weights in code:
+      30% — inlier count (saturates at 200)
+      30% — geometric tracking ratio (inliers / tracked)
+      20% — EKF position covariance (inverse)
+      10% — IMU timing health (dt < 40 ms)
 
-    State from confidence:
-      ≥ 70  → TRACKING
-      40–70 → DEGRADED
-      < 40 for 2 s → LOST → RELOCALIZING
+    LiDAR altitude feeds the EKF via ``update_lidar_alt``; it is not an extra
+    additive term in this scalar score. The reserved 10% in the algorithm
+    docstring is unused in the current formula.
     """
 
     position_covariance: List[float] = field(
@@ -231,7 +229,7 @@ class VIOState:
 
     @property
     def pos_cov_scalar(self) -> float:
-        """Scalar position uncertainty: mean diagonal of position covariance."""
+        """Mean of ``position_covariance`` diagonal entries (variance, m²)."""
         return sum(self.position_covariance) / 3.0
 
     def to_dict(self) -> dict:

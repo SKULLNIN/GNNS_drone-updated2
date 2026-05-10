@@ -37,6 +37,8 @@ The project script **splits** the pipeline into three processes:
 Run: `./scripts/jetson_nano/gnns_vio_stack.sh stack`  
 Logs (default `GNNS_LOG_DIR=/tmp`): `gnns_realsense.log`, `gnns_rgbd_odometry.log`, `gnns_rtabmap.log`.
 
+**Odom-only (steps 1–2, no RTAB-Map SLAM):** `./scripts/jetson_nano/gnns_odom_stack.sh stack` — same RealSense + `rgbd_odometry` as tier 1–2 above, but **no** mapping node. Use when you only need `/odom` for `vio_config.yaml` → `odom_source: "ros2"`. Logs: `gnns_odom_realsense.log`, `gnns_odom_rgbd_odometry.log`.
+
 ## Bring-up Order
 
 ### 1. RealSense Camera
@@ -256,8 +258,9 @@ Symptoms in the console:
 **What to run (project script):**
 
 ```bash
-# Default is now preset=recovery (F2F + ORB + MinInliers 8). To restore your old F2M/FAST tuning:
-GNNS_RTABMAP_PRESET=default ./scripts/jetson_nano/gnns_vio_stack.sh stack
+# Default stack preset is `default` (see GNNS_RTABMAP_PRESET in gnns_vio_stack.sh).
+# For Frame-to-Frame + ORB recovery tuning, run e.g.:
+GNNS_RTABMAP_PRESET=recovery ./scripts/jetson_nano/gnns_vio_stack.sh stack
 ```
 
 **Quick checks:**
@@ -295,7 +298,7 @@ Symptoms:
 **Script tweaks (`gnns_vio_stack.sh`):**
 
 - `odom_sensor_sync:=true` and `qos_odom:=1` for the SLAM node (already set in current script) to align odometry with sensors.
-- **Increase TF wait:** `export GNNS_WAIT_FOR_TRANSFORM=0.5` (default) or try `1.0` if warnings persist.
+- **Increase TF wait:** default `GNNS_WAIT_FOR_TRANSFORM` is **2.0** s in `gnns_vio_stack.sh`; export a higher value (e.g. `3.0`) if warnings persist.
 
 **If the gap is tens of seconds (e.g. 200 s):** the fix is not only TF tolerance — **restart rgbd_odometry** or improve scene/lighting so VO tracks again; stale TF means the odometry pipeline is not publishing fresh transforms.
 

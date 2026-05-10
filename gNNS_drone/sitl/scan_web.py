@@ -30,7 +30,7 @@ sys.path.insert(0, PROJECT_ROOT)
 
 from gnns_drone.flight_controller import FlightController, FlightConfig
 from gnns_drone.mavlink_bridge import MAVLinkBridge
-from gnns_drone.rtabmap_odom import create_odom_provider, _load_vio_config
+from gnns_drone.rtabmap_odom import create_odom_provider, _load_vio_config, VIO_SOURCE_CHOICES
 from area_scanner import AreaScanner, SafetyGrid, LiveSensor
 from lidar_avoider import LidarAvoider
 
@@ -187,50 +187,52 @@ class DroneScanner:
             logger.warning(f"Rangefinder setup: {e}")
 
     def _start_ros_background(self):
-        """Start ROS sensors in a completely detached background thread.
-        
-        This runs AFTER the drone is connected and cannot block anything.
-        If ROS isn't available, the drone flies fine without it.
+        """Start optional ROS2-linked sensors in a background thread (non-blocking).
+
+        Probes ``ros2 topic list`` under Jazzy/Humble setup — no ROS 1 ``rospy``.
+        If ROS 2 is not available, the scanner still runs on MAVLink-only data.
         """
         def _ros_init():
             try:
-                import rospy
-                if not rospy.core.is_initialized():
-                    # Try to init ROS with a short timeout approach
-                    import subprocess, os
-                    # Check if roscore exists
-                    try:
-                        result = subprocess.run(
-                            ['bash', '-c', 'source /opt/ros/noetic/setup.bash && rostopic list'],
-                            capture_output=True, timeout=3,
-                            env={**os.environ, 'ROS_MASTER_URI': 'http://localhost:11311'}
-                        )
-                        if result.returncode != 0:
-                            logger.info("roscore not running — ROS sensors disabled (drone flies fine without)")
-                            return
-                    except Exception:
-                        logger.info("ROS not available — sensors disabled (drone flies fine without)")
-                        return
-                    
-                    rospy.init_node("gnns_sensors", anonymous=True, disable_signals=True)
-                
-                # Start depth camera
+                import subprocess
+
+                try:
+                    result = subprocess.run(
+                        [
+                            "bash",
+                            "-lc",
+                            "source /opt/ros/jazzy/setup.bash 2>/dev/null || "
+                            "source /opt/ros/humble/setup.bash 2>/dev/null || "
+                            "source /opt/ros/iron/setup.bash 2>/dev/null || true; "
+                            "ros2 topic list",
+                        ],
+                        capture_output=True,
+                        timeout=5,
+                    )
+                except Exception:
+                    logger.info("ROS 2 CLI not available — ROS background sensors skipped")
+                    return
+
+                if result.returncode != 0:
+                    logger.info(
+                        "ros2 topic list failed — ROS background sensors skipped "
+                        "(drone still flies on MAVLink)"
+                    )
+                    return
+
                 if self.scanner.sensor.depth_reader:
                     self.scanner.sensor.start_depth_camera()
                     logger.info("✓ Depth camera started (background)")
-                
-                # Start lidar
+
                 self.avoider.start()
                 logger.info("✓ Lidar started (background)")
-                
-            except ImportError:
-                logger.info("ROS not installed — using MAVLink-only mode")
+
             except Exception as e:
-                logger.info(f"ROS init skipped: {e}")
-        
-        t = threading.Thread(target=_ros_init, daemon=True, name="ros-bg-init")
+                logger.info(f"ROS background init skipped: {e}")
+
+        t = threading.Thread(target=_ros_init, daemon=True, name="ros2-bg-init")
         t.start()
-        logger.info("ROS sensors starting in background (non-blocking)")
+        logger.info("ROS2 / sensors starting in background (non-blocking)")
 
     def _start_bg_scan(self):
         """Continuously scan at current position in background."""
@@ -820,7 +822,7 @@ def main():
     parser = argparse.ArgumentParser(description="gNNS Autonomous Scanner Web UI")
     parser.add_argument("--sitl", action="store_true")
     parser.add_argument("--vio-source", default=None,
-                        choices=["ros2", "orbslam3", "t265_raw", "simulated"],
+                        choices=VIO_SOURCE_CHOICES,
                         help="Odometry source (default from vio_config)")
     parser.add_argument("--port", type=int, default=5001)
     args = parser.parse_args()

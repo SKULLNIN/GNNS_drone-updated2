@@ -27,7 +27,7 @@ PROJECT_ROOT = str(Path(__file__).parent.parent)
 sys.path.insert(0, PROJECT_ROOT)
 
 from .mavlink_bridge import MAVLinkBridge
-from .rtabmap_odom import create_odom_provider, _load_vio_config
+from .rtabmap_odom import create_odom_provider, _load_vio_config, VIO_SOURCE_CHOICES
 from .flight_controller import FlightController, FlightConfig
 
 logger = logging.getLogger("gnns.web")
@@ -675,7 +675,22 @@ class WebHandler(SimpleHTTPRequestHandler):
             self.wfile.write(HTML_PAGE.encode())
 
         elif path == '/api/state':
-            state = drone.get_state() if drone else {"connected": False, "status": "No drone"}
+            if drone:
+                state = drone.get_state()
+            else:
+                state = {
+                    "connected": False,
+                    "flying": False,
+                    "status": "No drone",
+                    "n": 0.0,
+                    "e": 0.0,
+                    "alt": 0.0,
+                    "speed": 0.0,
+                    "home_dist": 0.0,
+                    "vx": 0.0,
+                    "vy": 0.0,
+                    "log": [],
+                }
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
@@ -749,7 +764,7 @@ def main():
     parser = argparse.ArgumentParser(description="gNNS Drone Web Control")
     parser.add_argument("--sitl", action="store_true", help="SITL mode")
     parser.add_argument("--vio-source", default=None,
-                        choices=["ros2", "orbslam3", "t265_raw", "simulated"],
+                        choices=VIO_SOURCE_CHOICES,
                         help="Odometry source (default from vio_config)")
     parser.add_argument("--port", type=int, default=5000, help="Web server port")
     parser.add_argument("--no-auto-connect", action="store_true",
@@ -770,8 +785,10 @@ def main():
         if drone.connect():
             print("Connected!")
         else:
-            print("Connection failed! Start SITL first.")
-            return
+            print(
+                "Connection failed — web UI starting anyway; "
+                "fix MAVLink then use /api/connect or restart."
+            )
 
     # Start web server
     server = HTTPServer(('0.0.0.0', args.port), WebHandler)
@@ -784,8 +801,10 @@ def main():
         server.serve_forever()
     except KeyboardInterrupt:
         print("\nShutting down...")
-        if drone.connected:
-            drone.land()
+        if drone and getattr(drone, "connected", False):
+            land_thr = threading.Thread(target=drone.land, daemon=True)
+            land_thr.start()
+            land_thr.join(timeout=5.0)
         server.shutdown()
 
 

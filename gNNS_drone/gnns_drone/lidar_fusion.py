@@ -74,9 +74,9 @@ class LidarFusion:
         self._max_range_cm = cfg.get("max_range_cm", 800)   # 8 m
         self._min_range_m  = cfg.get("min_range_m",  0.15)
 
-        # Nadir bin index (0–71). 36 = directly forward → nadir when
-        # sensor is mounted facing down. Adjust per installation.
-        self._nadir_bin    = cfg.get("nadir_bin", 36)
+        # Nadir bin index (0–71). Clamp invalid YAML values.
+        nadir = int(cfg.get("nadir_bin", 36))
+        self._nadir_bin = max(0, min(_NUM_SECTORS - 1, nadir))
 
         # Watchdog: if no scan for this many seconds, mark as disconnected
         self._watchdog_s   = cfg.get("watchdog_s", 2.0)
@@ -115,10 +115,10 @@ class LidarFusion:
             from rclpy.node import Node
             from sensor_msgs.msg import LaserScan
 
-            # NOTE: rclpy.init() is global per-process. Sharing context with
-            # RTABMapOdom / ORBSLAM3Odom. Shutdown in any module affects all.
-            if not rclpy.ok():
-                rclpy.init()
+            from .rclpy_context import rclpy_acquire
+
+            # Shared process context with RTABMapOdom / ORBSLAM3Odom
+            rclpy_acquire()
 
             node = rclpy.create_node("gnns_lidar_fusion")
             node.create_subscription(
@@ -319,6 +319,9 @@ class LidarFusion:
     def _ros_spin_loop(self, node):
         try:
             import rclpy
+
+            from .rclpy_context import rclpy_release
+
             while self._running:
                 rclpy.spin_once(node, timeout_sec=0.1)
         except Exception as e:
@@ -329,9 +332,7 @@ class LidarFusion:
             except Exception:
                 pass
             try:
-                import rclpy
-                if rclpy.ok():
-                    rclpy.shutdown()
+                rclpy_release()
             except Exception:
                 pass
 

@@ -244,7 +244,11 @@ class Navigator:
             self.bridge.land()
             self.bridge.wait_landed(timeout=30)
         else:
-            self.lander.execute(0, 0)
+            landed = self.lander.execute(0, 0)
+            if not landed:
+                logger.warning("Home precision landing failed, doing normal land")
+                self.bridge.land()
+                self.bridge.wait_landed(timeout=30)
 
         logger.info(f"\n  MISSION COMPLETE!")
         logger.info(f"  Waypoints: {self.waypoints_completed}/{self.waypoints.count}")

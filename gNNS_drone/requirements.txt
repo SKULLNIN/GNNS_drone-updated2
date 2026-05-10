@@ -31,6 +31,3 @@ rplidar-roboticia>=0.9.5
 
 # Computer vision (ArUco, optical flow, feature detection)
 opencv-contrib-python>=4.5.0
-
-# Scientific computing (used in EKF, geometry)
-scipy>=1.7.0

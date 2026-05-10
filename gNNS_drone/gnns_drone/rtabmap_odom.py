@@ -32,6 +32,17 @@ import yaml
 
 logger = logging.getLogger("gnns.rtabmap")
 
+# Valid `--vio-source` / `odom_source` values (excluding sitl, which is mode-driven).
+VIO_SOURCE_CHOICES = [
+    "ros2",
+    "rtabmap",
+    "orbslam3",
+    "gnns_vio",
+    "t265_raw",
+    "simulated",
+    "voxl",
+]
+
 
 def _load_vio_config() -> dict:
     """Load vio_config.yaml and return ros2_odom section (or empty dict)."""
@@ -44,6 +55,19 @@ def _load_vio_config() -> dict:
         return data.get("ros2_odom", {}) if data else {}
     except Exception as e:
         logger.warning(f"Could not load vio_config: {e}")
+        return {}
+
+
+def _load_full_vio_config_yaml() -> dict:
+    """Full vio_config.yaml contents (ros2_odom + vio + sensors)."""
+    cfg_path = Path(__file__).parent.parent / "config" / "vio_config.yaml"
+    if not cfg_path.exists():
+        return {}
+    try:
+        with open(cfg_path, "r") as f:
+            return yaml.safe_load(f) or {}
+    except Exception as e:
+        logger.warning(f"Could not load full vio_config: {e}")
         return {}
 
 
@@ -225,7 +249,8 @@ class RTABMapOdom:
         self._vel_estimator = VelocityEstimator(alpha=0.3)
         self._running = False
         self._thread = None
-        
+        self._gnns_tracker = None  # VIOTracker when mode == "gnns_vio"
+
         # Callbacks
         self._on_loop_closure: List[Callable] = []
         self._on_quality_drop: List[Callable] = []
@@ -274,6 +299,8 @@ class RTABMapOdom:
             self._thread = threading.Thread(target=self._run_sitl, daemon=True)
         elif self.mode == "voxl":
             self._thread = threading.Thread(target=self._run_voxl, daemon=True)
+        elif self.mode == "gnns_vio":
+            self._thread = threading.Thread(target=self._run_gnns_vio, daemon=True)
         else:
             raise ValueError(f"Unknown mode: {self.mode}")
         self._thread.start()
@@ -292,6 +319,12 @@ class RTABMapOdom:
             self._thread.join(timeout=5.0)
             if self._thread.is_alive():
                 logger.warning("Odometry thread did not stop cleanly within 5 s")
+        if self._gnns_tracker is not None:
+            try:
+                self._gnns_tracker.stop()
+            except Exception as e:
+                logger.warning("VIOTracker stop failed: %s", e)
+            self._gnns_tracker = None
         logger.info("Odometry stopped")
 
     def _update_odom(self, x, y, z, roll, pitch, yaw,
@@ -391,97 +424,98 @@ class RTABMapOdom:
             self._run_t265()
             return
 
-        # NOTE: rclpy.init() is global per-process. If LidarFusion or
-        # ORBSLAM3Odom already initialised rclpy in this process, we share
-        # the same context. Shutdown in any module tears it down for all.
-        if not rclpy.ok():
-            rclpy.init()
-        node = rclpy.create_node('gnns_odom_subscriber')
+        from .rclpy_context import rclpy_acquire, rclpy_release
 
-        odom_topic = self.config.get("odom_topic", "/odom")
-        info_topic = self.config.get("rtabmap_info_topic", "/rtabmap/info")
-        frame_convention = self.config.get("odom_frame_convention", "ros_enu_to_ned")
-        if frame_convention not in ("ros_enu_to_ned", "identity"):
-            logger.warning(
-                f"Unknown odom_frame_convention '{frame_convention}', "
-                "falling back to 'ros_enu_to_ned'. "
-                "Valid values: ros_enu_to_ned, identity."
-            )
-            frame_convention = "ros_enu_to_ned"
-        logger.info(f"Frame convention: {frame_convention}")
-
+        rclpy_acquire()
         try:
-            def odom_callback(msg: Odometry):
-                """Process odometry from RTAB-Map."""
+            node = rclpy.create_node('gnns_odom_subscriber')
+
+            odom_topic = self.config.get("odom_topic", "/odom")
+            info_topic = self.config.get("rtabmap_info_topic", "/rtabmap/info")
+            frame_convention = self.config.get("odom_frame_convention", "ros_enu_to_ned")
+            if frame_convention not in ("ros_enu_to_ned", "identity"):
+                logger.warning(
+                    f"Unknown odom_frame_convention '{frame_convention}', "
+                    "falling back to 'ros_enu_to_ned'. "
+                    "Valid values: ros_enu_to_ned, identity."
+                )
+                frame_convention = "ros_enu_to_ned"
+            logger.info(f"Frame convention: {frame_convention}")
+
+            try:
+                def odom_callback(msg: Odometry):
+                    """Process odometry from RTAB-Map."""
+                    try:
+                        pos = msg.pose.pose.position
+                        if frame_convention == "ros_enu_to_ned":
+                            # ROS uses ENU (x=East, y=North, z=Up); convert to NED.
+                            north = pos.y
+                            east = pos.x
+                            down = -pos.z
+                        else:  # identity — caller guarantees NED-aligned topics
+                            north = pos.x
+                            east = pos.y
+                            down = pos.z
+
+                        q = msg.pose.pose.orientation
+                        sinr = 2.0 * (q.w * q.x + q.y * q.z)
+                        cosr = 1.0 - 2.0 * (q.x * q.x + q.y * q.y)
+                        roll = math.atan2(sinr, cosr)
+
+                        sinp = 2.0 * (q.w * q.y - q.z * q.x)
+                        sinp = max(-1.0, min(1.0, sinp))
+                        pitch = math.asin(sinp)
+
+                        siny = 2.0 * (q.w * q.z + q.x * q.y)
+                        cosy = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+                        yaw = math.atan2(siny, cosy)
+
+                        pos_cov = msg.pose.covariance[0]
+                        # Monotonic mapping: high covariance → low confidence, never 0
+                        confidence = max(0, min(100, int(100.0 / (1.0 + pos_cov))))
+
+                        timestamp = (
+                            msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+                        )
+
+                        self._update_odom(
+                            north, east, down, roll, pitch, yaw,
+                            timestamp, confidence=confidence,
+                        )
+                    except Exception as e:
+                        logger.error(f"odom_callback error: {e}")
+
+                def info_callback(msg: Info):
+                    """Process RTAB-Map info (loop closures, features)."""
+                    try:
+                        if msg.loop_closure_id > 0:
+                            with self._odom_lock:
+                                self._odom.loop_closure_id = msg.loop_closure_id
+                                self._odom.num_features = msg.ref_words
+                                # num_inliers: RANSAC inlier count only; do not map
+                                # loop_closure_transform_accepted (0/1 flag) here.
+                    except Exception as e:
+                        logger.error(f"info_callback error: {e}")
+
+                node.create_subscription(
+                    Odometry, odom_topic, odom_callback, qos_profile_sensor_data
+                )
+                node.create_subscription(
+                    Info, info_topic, info_callback, qos_profile_sensor_data
+                )
+
+                logger.info("Subscribed to %s and %s", odom_topic, info_topic)
+
+                while self._running:
+                    rclpy.spin_once(node, timeout_sec=0.1)
+            finally:
                 try:
-                    pos = msg.pose.pose.position
-                    if frame_convention == "ros_enu_to_ned":
-                        # ROS uses ENU (x=East, y=North, z=Up); convert to NED.
-                        north = pos.y
-                        east = pos.x
-                        down = -pos.z
-                    else:  # identity — caller guarantees NED-aligned topics
-                        north = pos.x
-                        east = pos.y
-                        down = pos.z
-
-                    q = msg.pose.pose.orientation
-                    sinr = 2.0 * (q.w * q.x + q.y * q.z)
-                    cosr = 1.0 - 2.0 * (q.x * q.x + q.y * q.y)
-                    roll = math.atan2(sinr, cosr)
-
-                    sinp = 2.0 * (q.w * q.y - q.z * q.x)
-                    sinp = max(-1.0, min(1.0, sinp))
-                    pitch = math.asin(sinp)
-
-                    siny = 2.0 * (q.w * q.z + q.x * q.y)
-                    cosy = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
-                    yaw = math.atan2(siny, cosy)
-
-                    pos_cov = msg.pose.covariance[0]
-                    # Monotonic mapping: high covariance → low confidence, never 0
-                    confidence = max(0, min(100, int(100.0 / (1.0 + pos_cov))))
-
-                    timestamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
-
-                    self._update_odom(
-                        north, east, down, roll, pitch, yaw,
-                        timestamp, confidence=confidence
-                    )
-                except Exception as e:
-                    logger.error(f"odom_callback error: {e}")
-
-            def info_callback(msg: Info):
-                """Process RTAB-Map info (loop closures, features)."""
-                try:
-                    if msg.loop_closure_id > 0:
-                        with self._odom_lock:
-                            self._odom.loop_closure_id = msg.loop_closure_id
-                            self._odom.num_features = msg.ref_words
-                            self._odom.num_inliers = msg.loop_closure_transform_accepted
-                except Exception as e:
-                    logger.error(f"info_callback error: {e}")
-
-            node.create_subscription(
-                Odometry, odom_topic, odom_callback, qos_profile_sensor_data
-            )
-            node.create_subscription(
-                Info, info_topic, info_callback, qos_profile_sensor_data
-            )
-
-            logger.info("Subscribed to %s and %s", odom_topic, info_topic)
-
-            while self._running:
-                rclpy.spin_once(node, timeout_sec=0.1)
+                    node.destroy_node()
+                except Exception:
+                    pass
         finally:
             try:
-                node.destroy_node()
-            except Exception:
-                pass
-            try:
-                import rclpy
-                if rclpy.ok():
-                    rclpy.shutdown()
+                rclpy_release()
             except Exception:
                 pass
 
@@ -553,6 +587,76 @@ class RTABMapOdom:
         while self._running:
             self._update_odom(0, 0, 0, 0, 0, 0, time.time(), confidence=90)
             time.sleep(1.0 / 30)
+
+    # ==============================================================
+    # GNNS_VIO MODE — Custom VIOAlgorithm via VIOTracker (Python, no ROS /odom)
+    # ==============================================================
+
+    def _run_gnns_vio(self):
+        """
+        Run Intel RealSense + gnns_drone VIOAlgorithm pipeline.
+        Requires pyrealsense2 and vio_algorithm; uses config['vio'] from vio_config.yaml.
+        """
+        try:
+            from .vio_tracker import VIOTracker
+        except ImportError as e:
+            logger.error("gnns_vio mode requires vio_tracker: %s", e)
+            self._run_simulated()
+            return
+
+        vio_section = self.config.get("vio") or {}
+        camera = (vio_section.get("camera_type") or "d435i").lower()
+        out_hz = float(
+            vio_section.get("output_rate_hz")
+            or self.config.get("output_rate_hz")
+            or 30.0
+        )
+        out_hz = max(5.0, min(60.0, out_hz))
+        period = 1.0 / out_hz
+
+        try:
+            tracker = VIOTracker(camera_type=camera, config=vio_section)
+            self._gnns_tracker = tracker
+            tracker.start()
+        except Exception as e:
+            logger.error("gnns_vio VIOTracker start failed: %s", e)
+            self._run_simulated()
+            return
+
+        logger.info("gnns_vio: VIOTracker started (camera=%s, poll=%.1f Hz)", camera, out_hz)
+
+        while self._running:
+            try:
+                pose = tracker.get_pose()
+                ts = pose.timestamp if pose.timestamp > 0 else time.time()
+                vx = vy = vz = None
+                if all(
+                    math.isfinite(getattr(pose, ax, float("nan")))
+                    for ax in ("vx", "vy", "vz")
+                ):
+                    vx, vy, vz = pose.vx, pose.vy, pose.vz
+                self._update_odom(
+                    pose.x, pose.y, pose.z,
+                    pose.roll, pose.pitch, pose.yaw,
+                    ts,
+                    confidence=int(max(0, min(100, pose.confidence))),
+                    features=int(pose.features or 0),
+                    inliers=0,
+                    vx=vx, vy=vy, vz=vz,
+                )
+                cov = float(pose.covariance or 0.0)
+                pos_sigma = math.sqrt(max(0.0, cov))
+                with self._odom_lock:
+                    self._odom.covariance_pos = pos_sigma
+            except Exception as e:
+                logger.error("gnns_vio poll error: %s", e)
+            time.sleep(period)
+
+        try:
+            tracker.stop()
+        except Exception as e:
+            logger.warning("gnns_vio VIOTracker stop in thread: %s", e)
+        self._gnns_tracker = None
 
     # ==============================================================
     # SITL MODE — Read position from MAVLink SITL
@@ -704,7 +808,7 @@ def create_odom_provider(
     Create an odometry provider based on source.
 
     Args:
-        source: "sitl"     | "ros2" | "rtabmap" | "orbslam3" |
+        source: "sitl"     | "ros2" | "rtabmap" | "orbslam3" | "gnns_vio" |
                 "t265_raw" | "simulated" | "voxl"
         config: Optional dict; caller-supplied keys win over ros2_odom defaults.
                 For orbslam3/ros2/voxl may include topic names, voxl_host, etc.
@@ -742,7 +846,15 @@ def create_odom_provider(
         voxl_client = VoxlRTABMapClient(mode=voxl_mode, config=cfg)
         return RTABMapOdom(mode="voxl", config=cfg, voxl_client=voxl_client)
 
+    if source == "gnns_vio":
+        merged = dict(cfg)
+        full = _load_full_vio_config_yaml()
+        merged["vio"] = merged.get("vio") or full.get("vio", {})
+        for k, v in (full.get("ros2_odom") or {}).items():
+            merged.setdefault(k, v)
+        return RTABMapOdom(mode="gnns_vio", config=merged)
+
     raise ValueError(
         f"Unknown odom source: {source!r}. "
-        f"Valid: sitl, ros2, rtabmap, orbslam3, t265_raw, simulated, voxl"
+        f"Valid: sitl, ros2, rtabmap, orbslam3, gnns_vio, t265_raw, simulated, voxl"
     )

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
-# gnns_vio_stack.sh — RealSense + RTAB-Map + gNNS VIO (Jetson / Ubuntu)
+# gnns_odom_stack.sh — RealSense + rgbd_odometry only (no RTAB-Map SLAM / map)
+# Jetson / Ubuntu — companion to gnns_vio_stack.sh
 # =============================================================================
 #
 # Common issues fixed in this script:
@@ -35,57 +36,23 @@
 #      • For gravity constraints in SLAM: run imu_filter_madgwick (or similar), then set
 #        GNNS_RTABMAP_IMU=1 or GNNS_RTABMAP_IMU_TOPIC=/your/filtered/imu
 #
-# Usage (from repo root that contains gnns_drone/ and config/):
+# Usage (from repo root that contains gNNS_drone/ and config/):
 #
-#   chmod +x scripts/jetson_nano/gnns_vio_stack.sh
+#   chmod +x scripts/jetson_nano/gnns_odom_stack.sh
 #
-#   ./scripts/jetson_nano/gnns_vio_stack.sh realsense    # camera + IMU only
-#   ./scripts/jetson_nano/gnns_vio_stack.sh rtabmap      # rgbd_odometry + RTAB (camera up)
-#   ./scripts/jetson_nano/gnns_vio_stack.sh stack        # RealSense + odom + RTAB (recommended)
-#   ./scripts/jetson_nano/gnns_vio_stack.sh mission --demo
+#   ./scripts/jetson_nano/gnns_odom_stack.sh realsense   # Camera + IMU only (no odometry node)
+#   ./scripts/jetson_nano/gnns_odom_stack.sh odom        # rgbd_odometry only (RealSense must already run)
+#   ./scripts/jetson_nano/gnns_odom_stack.sh stack       # RealSense (bg) + rgbd_odometry — no SLAM
+#   ./scripts/jetson_nano/gnns_odom_stack.sh mission --demo
 #
-# Environment (important):
-#   GNNS_WAIT_IMU=0          # default — do NOT wait for IMU (fixes stuck message)
-#   GNNS_WAIT_IMU=1          # enable after: ros2 topic hz /camera/camera/imu works
-#   GNNS_IMU_TOPIC=/.../imu  # override if your IMU is on a different path (rgbd_odometry + wait_imu)
-#   GNNS_RTABMAP_IMU=0|1 — SLAM IMU: 0=do not use raw RealSense IMU (default; avoids orientation spam)
-#   GNNS_RTABMAP_IMU_TOPIC=/... — optional explicit imu topic for rtabmap SLAM (e.g. Madgwick output)
-#   GNNS_RTABMAP_VIZ — unset + DISPLAY set → rtabmap_viz ON; unset + no DISPLAY → OFF.
-#                        Set 0 or 1 explicitly to override (SSH: export GNNS_RTABMAP_VIZ=0).
-#   GNNS_LOG_DIR=/tmp        # RealSense + RTAB-Map logs
-#   GNNS_ODOM_TOPIC=/odom    # rgbd_odometry output + rtabmap input (default /odom)
-#   GNNS_WAIT_FOR_TRANSFORM=2.0   # rtabmap TF wait (seconds; larger tolerates stamp skew)
-#   GNNS_RTABMAP_NAMESPACE=rtabmap  # must match ros2 launch namespace (for param hooks)
-#   GNNS_RTABMAP_VIZ_SUBSCRIBE_ODOM=1  # set rtabmap_viz subscribe_odom=true (uses /odom vs TF stamp; reduces viz errors)
-#   GNNS_QOS — rtabmap base QoS for images (0=default; matches RealSense color/depth publishers)
-#   GNNS_QOS_IMU=2 — rtabmap IMU subscriber Best Effort (fixes IMU vs rtabmap mismatch)
-#   GNNS_QOS_ODOM=0 — rgbd_odometry image QoS (0=default; do NOT force 2 or odom may get NO camera data)
-#   GNNS_ODOM_SENSOR_SYNC=1|0 — rtabmap odom_sensor_sync (try 0 if odom/image timestamps fight)
-#   GNNS_STACK_CAMERA_WAIT_SEC=10 — sleep after RealSense starts before checking topics (stack mode)
-#   GNNS_ODOM_FRAME / GNNS_CAMERA_FRAME — must match rgbd_odometry TF (default odom / camera_link)
-#   GPU/CUDA — ros-*-rtabmap-* packages use CPU OpenCV; no env flag moves this stack to the GPU.
-#             Build OpenCV+RTAB-Map from source with CUDA to use the GPU; see docs/JETSON_LAPTOP_SETUP.md §11.
+# For full SLAM + mapping use scripts/jetson_nano/gnns_vio_stack.sh instead.
 #
+# Environment (same as gnns_vio_stack for rgbd_odometry; SLAM-only vars are ignored here):
+#   GNNS_WAIT_IMU, GNNS_IMU_TOPIC, GNNS_ODOM_TOPIC, GNNS_LOG_DIR=/tmp
+#   GNNS_RS_FPS, GNNS_ODOM_MAX_RATE, GNNS_APPROX_SYNC_MAX, GNNS_QUEUE_SIZE, GNNS_QOS_ODOM
 #   GNNS_RTABMAP_PRESET=default|recovery|accurate
-#       recovery — if you see "Not enough inliers 0/20" and odom quality=0:
-#         uses Frame-to-Frame odometry, lower MinInliers, ORB features (see below)
-#       accurate — F2M + GFTT, particle filter, tighter grid (CPU heavier; best map quality)
-#   GNNS_RS_FPS — default 15; on Jetson Orin try 30 after `ros2 topic hz /odom` is stable
-#   GNNS_ODOM_MAX_RATE — cap rgbd_odometry publish rate (Hz); default = GNNS_RS_FPS (was hardcoded 15)
-#   GNNS_RTABMAP_DETECTION_RATE — optional; loop-closure / hypothesis checks per second (default preset=2).
-#     Higher (e.g. 4–5) feels snappier on strong CPUs; costs more CPU.
-#   GNNS_APPROX_SYNC_MAX — default 0.10 s (motion/jitter tolerant; use 0.04 only if CPU keeps up)
-#   GNNS_QUEUE_SIZE — default 10 for rgbd_odometry + rtabmap (balance lag vs starvation under motion)
-#   If you see "extrapolation into the future" odom→camera_link: VO/TF stalled (lost track or CPU).
-#     Try: GNNS_RTABMAP_PRESET=default (F2M), GNNS_RTABMAP_VIZ=0, GNNS_RS_FPS=15, or looser sync/queue above.
-#   GNNS_USE_RGBD_SYNC=0|1 — opt-in: run rtabmap_sync/rgbd_sync before odom (single fused rgbd stream)
-#   GNNS_RGBD_TOPIC — output topic when GNNS_USE_RGBD_SYNC=1 (default /gnns_rgbd_image)
-#
-# Quick VIO test (two terminals on Jetson):
-#   Terminal A: ./scripts/jetson_nano/gnns_vio_stack.sh realsense
-#   Terminal B:
-#     ros2 topic hz /camera/camera/imu
-#     GNNS_WAIT_IMU=0 GNNS_RTABMAP_VIZ=0 ./scripts/jetson_nano/gnns_vio_stack.sh rtabmap
+#   GNNS_ODOM_FRAME / GNNS_CAMERA_FRAME — must match rgbd_odometry TF (default odom / camera_link)
+#   GNNS_MISSION_VIO_SOURCE=ros2|gnns_vio — passed to python -m gnns_drone (default ros2)
 #
 # =============================================================================
 # Do not use set -u — ROS setup.bash references unset variables.
@@ -98,7 +65,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 ROS_DISTRO="${ROS_DISTRO:-humble}"
 SETUP="/opt/ros/${ROS_DISTRO}/setup.bash"
 if [[ ! -f "$SETUP" ]]; then
-  echo "[gnns_vio_stack] ERROR: Missing $SETUP — install ROS 2 ${ROS_DISTRO}" >&2
+  echo "[gnns_odom_stack] ERROR: Missing $SETUP — install ROS 2 ${ROS_DISTRO}" >&2
   exit 2
 fi
 # shellcheck source=/dev/null
@@ -115,9 +82,9 @@ fi
 
 LOG_DIR="${GNNS_LOG_DIR:-/tmp}"
 mkdir -p "$LOG_DIR"
-RS_LOG="${LOG_DIR}/gnns_realsense.log"
-RT_LOG="${LOG_DIR}/gnns_rtabmap.log"
-ODOM_LOG="${LOG_DIR}/gnns_rgbd_odometry.log"
+RS_LOG="${LOG_DIR}/gnns_odom_realsense.log"
+RT_LOG="${LOG_DIR}/gnns_odom_unused.log"
+ODOM_LOG="${LOG_DIR}/gnns_odom_rgbd_odometry.log"
 # Set only by launch_rgbd_odometry_bg — read ODOM_PID from this; do not capture the function with $(...).
 GNNS_RGBD_ODOM_PID=""
 # Set only by launch_rgbd_sync_bg when GNNS_USE_RGBD_SYNC=1
@@ -185,7 +152,7 @@ fi
 if [[ -z "${GNNS_RTABMAP_VIZ+x}" ]]; then
   if [[ -n "${DISPLAY:-}" ]]; then
     GNNS_RTABMAP_VIZ=1
-    echo "[gnns_vio_stack] GNNS_RTABMAP_VIZ unset + DISPLAY set → rtabmap_viz ON (set GNNS_RTABMAP_VIZ=0 to disable)" >&2
+    echo "[gnns_odom_stack] GNNS_RTABMAP_VIZ unset + DISPLAY set → rtabmap_viz ON (set GNNS_RTABMAP_VIZ=0 to disable)" >&2
   else
     GNNS_RTABMAP_VIZ=0
   fi
@@ -303,20 +270,8 @@ RTABMAP_ARGS_ACCURATE="--delete_db_on_start
 --Grid/CellSize 0.05
 --Grid/ClusterRadius 0.1"
 
-# Built when launching RTAB-Map (see build_rtab_rargs)
+# Built when launching rgbd_odometry (see build_rtab_rargs)
 RTAB_RARGS=""
-# Same preset but without Odom/* and OdoF2M/* — the rtabmap SLAM node does not declare those
-# ROS2 parameters; passing them in rtabmap_args crashes with ParameterNotDeclaredException.
-RTAB_SLAM_RARGS=""
-
-# Remove odometry-node-only CLI flags (rgbd_odometry accepts them; rtabmap slam does not).
-strip_rtabargs_for_slam_node() {
-  local s="$1"
-  # Each flag is "--Name value" with a single-token value (true/false/numbers).
-  s=$(echo "$s" | sed -E 's/--Odom\/[^ ]+ [^ ]+//g')
-  s=$(echo "$s" | sed -E 's/--OdoF2M\/[^ ]+ [^ ]+//g')
-  echo "$s" | tr -s ' ' | sed 's/^ *//;s/ *$//'
-}
 
 build_rtab_rargs() {
   # default = F2M (more stable when moving); use recovery if bootstrap fails in poor conditions
@@ -325,18 +280,18 @@ build_rtab_rargs() {
   case "$preset" in
     default)
       base="$RTABMAP_ARGS_DEFAULT"
-      echo "[gnns_vio_stack] RTAB-Map preset: default (F2M, motion-tuned MinInliers 8)" >&2
+      echo "[gnns_odom_stack] RTAB-Map preset: default (F2M, motion-tuned MinInliers 8)" >&2
       ;;
     recovery)
       base="$RTABMAP_ARGS_RECOVERY"
-      echo "[gnns_vio_stack] RTAB-Map preset: recovery (F2F, ORB, MinInliers 8)" >&2
+      echo "[gnns_odom_stack] RTAB-Map preset: recovery (F2F, ORB, MinInliers 8)" >&2
       ;;
     accurate)
       base="$RTABMAP_ARGS_ACCURATE"
-      echo "[gnns_vio_stack] RTAB-Map preset: accurate (F2M, GFTT, MinInliers 12, DetectionRate 2)" >&2
+      echo "[gnns_odom_stack] RTAB-Map preset: accurate (F2M, GFTT, MinInliers 12, DetectionRate 2)" >&2
       ;;
     *)
-      echo "[gnns_vio_stack] ERROR: unknown GNNS_RTABMAP_PRESET='${preset}' (use: default|recovery|accurate)" >&2
+      echo "[gnns_odom_stack] ERROR: unknown GNNS_RTABMAP_PRESET='${preset}' (use: default|recovery|accurate)" >&2
       exit 1
       ;;
   esac
@@ -350,7 +305,6 @@ build_rtab_rargs() {
   if [[ -n "${GNNS_RTABMAP_DETECTION_RATE:-}" ]]; then
     RTAB_RARGS="${RTAB_RARGS} --Rtabmap/DetectionRate ${GNNS_RTABMAP_DETECTION_RATE}"
   fi
-  RTAB_SLAM_RARGS="$(strip_rtabargs_for_slam_node "${RTAB_RARGS}")"
 }
 
 # Common RealSense launch arguments (IMU required — fixes "bad optional access")
@@ -376,16 +330,16 @@ wait_for_topic() {
   local topic="$1"
   local timeout="${2:-45}"
   local elapsed=0
-  echo "[gnns_vio_stack] Waiting for topic (up to ${timeout}s): ${topic}"
+  echo "[gnns_odom_stack] Waiting for topic (up to ${timeout}s): ${topic}"
   while [[ "$elapsed" -lt "$timeout" ]]; do
     if ros2 topic echo "$topic" --once >/dev/null 2>&1; then
-      echo "[gnns_vio_stack] OK: ${topic} is publishing."
+      echo "[gnns_odom_stack] OK: ${topic} is publishing."
       return 0
     fi
     sleep 1
     elapsed=$((elapsed + 1))
   done
-  echo "[gnns_vio_stack] WARN: timeout waiting for ${topic}" >&2
+  echo "[gnns_odom_stack] WARN: timeout waiting for ${topic}" >&2
   return 1
 }
 
@@ -398,15 +352,15 @@ wait_for_camera_rgb_depth_or_exit() {
   if [[ "${GNNS_USE_RGBD_SYNC}" == "1" ]]; then
     return 0
   fi
-  echo "[gnns_vio_stack] Waiting for camera topics (color + depth)…"
+  echo "[gnns_odom_stack] Waiting for camera topics (color + depth)…"
   if ! wait_for_topic "${RGB_TOPIC}" 60; then
-    echo "[gnns_vio_stack] ERROR: no messages on ${RGB_TOPIC}. Is RealSense running?" >&2
+    echo "[gnns_odom_stack] ERROR: no messages on ${RGB_TOPIC}. Is RealSense running?" >&2
     echo "--- last 30 lines of ${RS_LOG} ---" >&2
     tail -n 30 "${RS_LOG}" 2>/dev/null >&2 || true
     exit 1
   fi
   if ! wait_for_topic "${DEPTH_TOPIC}" 60; then
-    echo "[gnns_vio_stack] ERROR: no messages on ${DEPTH_TOPIC}." >&2
+    echo "[gnns_odom_stack] ERROR: no messages on ${DEPTH_TOPIC}." >&2
     echo "--- last 30 lines of ${RS_LOG} ---" >&2
     tail -n 30 "${RS_LOG}" 2>/dev/null >&2 || true
     exit 1
@@ -415,15 +369,15 @@ wait_for_camera_rgb_depth_or_exit() {
 
 wait_for_tf_odom_camera_link() {
   local max_wait="${1:-90}"
-  echo "[gnns_vio_stack] Waiting for TF ${ODOM_FRAME_FOR_TF} -> ${CAMERA_FRAME_FOR_TF} (up to ${max_wait}s)…"
+  echo "[gnns_odom_stack] Waiting for TF ${ODOM_FRAME_FOR_TF} -> ${CAMERA_FRAME_FOR_TF} (up to ${max_wait}s)…"
   # Do NOT use head -N: tf2_echo may print many lines before the first "Translation".
   # grep -m 1 stops at the first match (same pattern you see when tf2_echo works manually).
   if PARENT="${ODOM_FRAME_FOR_TF}" CHILD="${CAMERA_FRAME_FOR_TF}" \
     timeout "${max_wait}" bash -c 'ros2 run tf2_ros tf2_echo "$PARENT" "$CHILD" -r 10 2>&1 | grep -m 1 -q Translation'; then
-    echo "[gnns_vio_stack] OK: TF ${ODOM_FRAME_FOR_TF} -> ${CAMERA_FRAME_FOR_TF} (same tree as rgbd_odometry)."
+    echo "[gnns_odom_stack] OK: TF ${ODOM_FRAME_FOR_TF} -> ${CAMERA_FRAME_FOR_TF} (same tree as rgbd_odometry)."
     return 0
   fi
-  echo "[gnns_vio_stack] ERROR: TF ${ODOM_FRAME_FOR_TF} -> ${CAMERA_FRAME_FOR_TF} never connected (two TF trees)." >&2
+  echo "[gnns_odom_stack] ERROR: TF ${ODOM_FRAME_FOR_TF} -> ${CAMERA_FRAME_FOR_TF} never connected (two TF trees)." >&2
   echo "  rgbd_odometry must publish odom→camera_link (publish_tf=true). Check: ${ODOM_LOG}" >&2
   echo "  Run: ros2 run tf2_tools view_frames   # or: ros2 run tf2_ros tf2_echo odom camera_link" >&2
   return 1
@@ -433,7 +387,7 @@ wait_for_tf_odom_camera_link() {
 # RealSense: MUST enable IMU to avoid optional-access / missing-IMU failures
 # -----------------------------------------------------------------------------
 launch_realsense() {
-  echo "[gnns_vio_stack] Launching RealSense with IMU (gyro+accel, fused IMU topic)…"
+  echo "[gnns_odom_stack] Launching RealSense with IMU (gyro+accel, fused IMU topic)…"
   echo "  Topics: ${RGB_TOPIC}, ${DEPTH_TOPIC}, ${IMU_TOPIC}"
   exec ros2 launch realsense2_camera rs_launch.py "${RS_LAUNCH_ARGS[@]}"
 }
@@ -464,7 +418,7 @@ kill_process_tree() {
 # -----------------------------------------------------------------------------
 # When GNNS_USE_RGBD_SYNC=1, odom + rtabmap subscribe_rgbd use GNNS_RGBD_TOPIC.
 launch_rgbd_sync_bg() {
-  echo "[gnns_vio_stack] Launching rgbd_sync (rtabmap_sync) → ${GNNS_RGBD_TOPIC}…" >&2
+  echo "[gnns_odom_stack] Launching rgbd_sync (rtabmap_sync) → ${GNNS_RGBD_TOPIC}…" >&2
   echo "  Log: ${ODOM_LOG}" >&2
   # shellcheck disable=SC2086
   ros2 run rtabmap_sync rgbd_sync --ros-args \
@@ -500,7 +454,7 @@ launch_rgbd_odometry_bg() {
     check_imu_tf="true"
   fi
 
-  echo "[gnns_vio_stack] Launching rgbd_odometry (rtabmap_odom)…" >&2
+  echo "[gnns_odom_stack] Launching rgbd_odometry (rtabmap_odom)…" >&2
   echo "  Log: ${ODOM_LOG}" >&2
   echo "  → ${ODOM_TOPIC}  max_update_rate=${ODOM_MAX_RATE} Hz  (wait_imu_to_init=${wait_imu_odom})" >&2
 
@@ -552,119 +506,22 @@ launch_rgbd_odometry_bg() {
 }
 
 # -----------------------------------------------------------------------------
-# rtabmap_viz: upstream launch omits subscribe_odom; set via param when node appears.
-# Uses /odom topic instead of TF-at-image-stamp (mitigates TF extrapolation spam when VO lags).
+# rgbd_odometry only — use when RealSense is already running (no SLAM)
 # -----------------------------------------------------------------------------
-enable_rtabmap_viz_subscribe_odom_bg() {
-  # Note: ros2 param set does NOT reinitialize DDS subscriptions at runtime.
-  # This single-attempt sets the parameter value for diagnostics only.
-  # The real fix for viz TF errors is keeping VO alive (Odom/ResetCountdown).
-  [[ "${RTABMAP_VIZ}" != "true" ]] && return 0
-  [[ "${GNNS_RTABMAP_VIZ_SUBSCRIBE_ODOM:-1}" != "1" ]] && return 0
-  (
-    local i=0
-    local max=120
-    while [[ "$i" -lt "$max" ]]; do
-      if ros2 node list 2>/dev/null | grep -qF "/${RTABMAP_NS}/rtabmap_viz"; then
-        ros2 param set "/${RTABMAP_NS}/rtabmap_viz" subscribe_odom true 2>/dev/null && \
-          echo "[gnns_vio_stack] Set /${RTABMAP_NS}/rtabmap_viz subscribe_odom=true" >&2
-        exit 0
-      fi
-      sleep 0.25
-      i=$((i + 1))
-    done
-  ) &
-}
-
-# -----------------------------------------------------------------------------
-# RTAB-Map SLAM only (external odometry — no rgbd_odometry in this launch)
-# -----------------------------------------------------------------------------
-launch_rtabmap_slam() {
-  build_rtab_rargs
-  enable_rtabmap_viz_subscribe_odom_bg
-  echo "[gnns_vio_stack] Launching RTAB-Map SLAM (visual_odometry:=false, uses ${ODOM_TOPIC})…"
-  echo "  Log: ${RT_LOG}"
-  echo "  rgb=${RGB_TOPIC} depth=${DEPTH_TOPIC}  imu(vo)=${IMU_TOPIC}  imu(rtabmap_slam)=${RTABMAP_SLAM_IMU_TOPIC}"
-  echo "  wait_imu_to_init=${WAIT_IMU_INIT}  rtabmap_viz=${RTABMAP_VIZ}"
-  echo "  odom_sensor_sync=${ODOM_SENSOR_SYNC_ARG}  wait_for_transform=${WAIT_FOR_TRANSFORM}s  qos=${GNNS_QOS}  qos_imu=${GNNS_QOS_IMU}  qos_odom=Reliable  namespace=${RTABMAP_NS}"
+launch_odom_rgbd_only() {
+  echo "[gnns_odom_stack] Odom-only session (rgbd_odometry → ${ODOM_TOPIC}, no map)"
+  echo "[gnns_odom_stack] rgbd_odometry log: ${ODOM_LOG}"
   if [[ "${GNNS_USE_RGBD_SYNC}" == "1" ]]; then
-    # shellcheck disable=SC2086
-    ros2 launch rtabmap_launch rtabmap.launch.py \
-      namespace:=${RTABMAP_NS} \
-      rgb_topic:="${RGB_TOPIC}" \
-      depth_topic:="${DEPTH_TOPIC}" \
-      camera_info_topic:="${INFO_TOPIC}" \
-      imu_topic:="${RTABMAP_SLAM_IMU_TOPIC}" \
-      frame_id:=camera_link \
-      approx_sync:=true \
-      approx_sync_max_interval:=${APPROX_SYNC_MAX} \
-      queue_size:=${QUEUE_SIZE} \
-      qos:=${GNNS_QOS} \
-      qos_imu:=${GNNS_QOS_IMU} \
-      subscribe_rgbd:=true \
-      rgbd_topic:=${GNNS_RGBD_TOPIC} \
-      rgbd_sync:=false \
-      wait_imu_to_init:=${WAIT_IMU_INIT} \
-      visual_odometry:=false \
-      odom_frame_id:=odom \
-      map_frame_id:=map \
-      publish_tf_map:=true \
-      publish_tf_odom:=false \
-      odom_topic:=${ODOM_TOPIC} \
-      odom_sensor_sync:=${ODOM_SENSOR_SYNC_ARG} \
-      wait_for_transform:=${WAIT_FOR_TRANSFORM} \
-      qos_odom:=1 \
-      rtabmap_viz:=${RTABMAP_VIZ} \
-      rtabmap_args:="${RTAB_SLAM_RARGS}" 2>&1 | tee -a "${RT_LOG}"
-  else
-    # shellcheck disable=SC2086
-    ros2 launch rtabmap_launch rtabmap.launch.py \
-      namespace:=${RTABMAP_NS} \
-      rgb_topic:="${RGB_TOPIC}" \
-      depth_topic:="${DEPTH_TOPIC}" \
-      camera_info_topic:="${INFO_TOPIC}" \
-      imu_topic:="${RTABMAP_SLAM_IMU_TOPIC}" \
-      frame_id:=camera_link \
-      approx_sync:=true \
-      approx_sync_max_interval:=${APPROX_SYNC_MAX} \
-      queue_size:=${QUEUE_SIZE} \
-      qos:=${GNNS_QOS} \
-      qos_imu:=${GNNS_QOS_IMU} \
-      subscribe_rgbd:=false \
-      wait_imu_to_init:=${WAIT_IMU_INIT} \
-      visual_odometry:=false \
-      odom_frame_id:=odom \
-      map_frame_id:=map \
-      publish_tf_map:=true \
-      publish_tf_odom:=false \
-      odom_topic:=${ODOM_TOPIC} \
-      odom_sensor_sync:=${ODOM_SENSOR_SYNC_ARG} \
-      wait_for_transform:=${WAIT_FOR_TRANSFORM} \
-      qos_odom:=1 \
-      rtabmap_viz:=${RTABMAP_VIZ} \
-      rtabmap_args:="${RTAB_SLAM_RARGS}" 2>&1 | tee -a "${RT_LOG}"
-  fi
-}
-
-# -----------------------------------------------------------------------------
-# rgbd_odometry (bg) + RTAB-Map SLAM — use when RealSense is already running
-# -----------------------------------------------------------------------------
-launch_rtabmap_with_odom() {
-  echo "[gnns_vio_stack] RTAB-Map session (rgbd_odometry → ${ODOM_TOPIC} → rtabmap)…"
-  echo "[gnns_vio_stack] rgbd_odometry log: ${ODOM_LOG}"
-  echo "[gnns_vio_stack] RTAB-Map log:       ${RT_LOG}"
-  if [[ "${GNNS_USE_RGBD_SYNC}" == "1" ]]; then
-    echo "[gnns_vio_stack] GNNS_USE_RGBD_SYNC=1 → rgbd_sync → ${GNNS_RGBD_TOPIC}"
+    echo "[gnns_odom_stack] GNNS_USE_RGBD_SYNC=1 → rgbd_sync → ${GNNS_RGBD_TOPIC}"
   fi
 
   : >"${ODOM_LOG}"
-  : >"${RT_LOG}"
 
   if [[ "${GNNS_USE_RGBD_SYNC}" == "1" ]]; then
     launch_rgbd_sync_bg
-    echo "[gnns_vio_stack] Waiting for fused RGB-D topic ${GNNS_RGBD_TOPIC}…"
+    echo "[gnns_odom_stack] Waiting for fused RGB-D topic ${GNNS_RGBD_TOPIC}…"
     if ! wait_for_topic "${GNNS_RGBD_TOPIC}" 45; then
-      echo "[gnns_vio_stack] ERROR: no messages on ${GNNS_RGBD_TOPIC}. Check ${ODOM_LOG}" >&2
+      echo "[gnns_odom_stack] ERROR: no messages on ${GNNS_RGBD_TOPIC}. Check ${ODOM_LOG}" >&2
       exit 1
     fi
   else
@@ -674,24 +531,24 @@ launch_rtabmap_with_odom() {
   launch_rgbd_odometry_bg
   ODOM_PID="${GNNS_RGBD_ODOM_PID}"
   if ! [[ "$ODOM_PID" =~ ^[0-9]+$ ]]; then
-    echo "[gnns_vio_stack] ERROR: invalid rgbd_odometry PID '${ODOM_PID}' — check ${ODOM_LOG}" >&2
+    echo "[gnns_odom_stack] ERROR: invalid rgbd_odometry PID '${ODOM_PID}' — check ${ODOM_LOG}" >&2
     exit 1
   fi
 
   cleanup_odom() {
-    echo "[gnns_vio_stack] Stopping rgbd_odometry (PID=${ODOM_PID})…"
+    echo "[gnns_odom_stack] Stopping rgbd_odometry (PID=${ODOM_PID})…"
     kill_process_tree "${ODOM_PID}"
     if [[ -n "${GNNS_RGBD_SYNC_PID:-}" ]] && [[ "${GNNS_RGBD_SYNC_PID}" =~ ^[0-9]+$ ]]; then
-      echo "[gnns_vio_stack] Stopping rgbd_sync (PID=${GNNS_RGBD_SYNC_PID})…"
+      echo "[gnns_odom_stack] Stopping rgbd_sync (PID=${GNNS_RGBD_SYNC_PID})…"
       kill_process_tree "${GNNS_RGBD_SYNC_PID}"
     fi
   }
   trap cleanup_odom EXIT INT TERM
 
-  echo "[gnns_vio_stack] rgbd_odometry PID=${ODOM_PID}"
-  echo "[gnns_vio_stack] Waiting for odometry on ${ODOM_TOPIC}…"
+  echo "[gnns_odom_stack] rgbd_odometry PID=${ODOM_PID}"
+  echo "[gnns_odom_stack] Waiting for odometry on ${ODOM_TOPIC}…"
   if ! wait_for_topic "${ODOM_TOPIC}" 60; then
-    echo "[gnns_vio_stack] ERROR: no messages on ${ODOM_TOPIC}. Is the camera running?" >&2
+    echo "[gnns_odom_stack] ERROR: no messages on ${ODOM_TOPIC}. Is the camera running?" >&2
     echo "  See: ${ODOM_LOG}" >&2
     echo "--- last 40 lines of ${ODOM_LOG} ---" >&2
     tail -n 40 "${ODOM_LOG}" 2>/dev/null >&2 || true
@@ -701,36 +558,35 @@ launch_rtabmap_with_odom() {
     exit 1
   fi
 
-  launch_rtabmap_slam
+  echo "[gnns_odom_stack] Odom ready. Blocking until rgbd_odometry exits (Ctrl+C to stop)…" >&2
+  wait "${ODOM_PID}" 2>/dev/null || true
   cleanup_odom
   trap - EXIT INT TERM
 }
 
 # -----------------------------------------------------------------------------
-# Full stack: RealSense background → rgbd_odometry → RTAB-Map foreground
+# Full stack: RealSense background → rgbd_odometry (no SLAM)
 # -----------------------------------------------------------------------------
-launch_stack() {
-  echo "[gnns_vio_stack] Starting full stack (RealSense → rgbd_odometry → RTAB-Map)…"
-  echo "[gnns_vio_stack] RealSense log:      ${RS_LOG}"
-  echo "[gnns_vio_stack] rgbd_odometry log:  ${ODOM_LOG}"
-  echo "[gnns_vio_stack] RTAB-Map log:       ${RT_LOG}"
+launch_odom_stack() {
+  echo "[gnns_odom_stack] Starting odom stack (RealSense → rgbd_odometry, no SLAM)…"
+  echo "[gnns_odom_stack] RealSense log:      ${RS_LOG}"
+  echo "[gnns_odom_stack] rgbd_odometry log:  ${ODOM_LOG}"
   if [[ "${GNNS_USE_RGBD_SYNC}" == "1" ]]; then
-    echo "[gnns_vio_stack] GNNS_USE_RGBD_SYNC=1 → rgbd_sync → ${GNNS_RGBD_TOPIC}"
+    echo "[gnns_odom_stack] GNNS_USE_RGBD_SYNC=1 → rgbd_sync → ${GNNS_RGBD_TOPIC}"
   fi
 
   : >"${RS_LOG}"
   : >"${ODOM_LOG}"
-  : >"${RT_LOG}"
 
   RS_PID="$(launch_realsense_bg)"
   if ! [[ "$RS_PID" =~ ^[0-9]+$ ]]; then
-    echo "[gnns_vio_stack] ERROR: invalid RealSense PID '${RS_PID}' (launch bug?) — check ${RS_LOG}" >&2
+    echo "[gnns_odom_stack] ERROR: invalid RealSense PID '${RS_PID}' (launch bug?) — check ${RS_LOG}" >&2
     exit 1
   fi
 
   ODOM_PID=""
   cleanup() {
-    echo "[gnns_vio_stack] Shutting down…"
+    echo "[gnns_odom_stack] Shutting down…"
     if [[ -n "${ODOM_PID}" ]] && [[ "$ODOM_PID" =~ ^[0-9]+$ ]]; then
       kill_process_tree "${ODOM_PID}"
     fi
@@ -741,14 +597,14 @@ launch_stack() {
   }
   trap cleanup EXIT INT TERM
 
-  echo "[gnns_vio_stack] RealSense PID=${RS_PID}"
+  echo "[gnns_odom_stack] RealSense PID=${RS_PID}"
   local cam_wait="${GNNS_STACK_CAMERA_WAIT_SEC:-10}"
-  echo "[gnns_vio_stack] Waiting for camera streams (${cam_wait} s)…"
+  echo "[gnns_odom_stack] Waiting for camera streams (${cam_wait} s)…"
   sleep "${cam_wait}"
 
   if [[ "$WAIT_IMU" == "1" ]]; then
     wait_for_topic "$IMU_TOPIC" 30 || {
-      echo "[gnns_vio_stack] IMU not seen on ${IMU_TOPIC}" >&2
+      echo "[gnns_odom_stack] IMU not seen on ${IMU_TOPIC}" >&2
       echo "  Run: ros2 topic list | grep -i imu" >&2
       echo "  Or retry with: GNNS_WAIT_IMU=0 $0 stack" >&2
     }
@@ -756,9 +612,9 @@ launch_stack() {
 
   if [[ "${GNNS_USE_RGBD_SYNC}" == "1" ]]; then
     launch_rgbd_sync_bg
-    echo "[gnns_vio_stack] Waiting for fused RGB-D topic ${GNNS_RGBD_TOPIC}…"
+    echo "[gnns_odom_stack] Waiting for fused RGB-D topic ${GNNS_RGBD_TOPIC}…"
     if ! wait_for_topic "${GNNS_RGBD_TOPIC}" 45; then
-      echo "[gnns_vio_stack] ERROR: no messages on ${GNNS_RGBD_TOPIC}. Check ${ODOM_LOG} and ${RS_LOG}" >&2
+      echo "[gnns_odom_stack] ERROR: no messages on ${GNNS_RGBD_TOPIC}. Check ${ODOM_LOG} and ${RS_LOG}" >&2
       exit 1
     fi
   else
@@ -768,13 +624,13 @@ launch_stack() {
   launch_rgbd_odometry_bg
   ODOM_PID="${GNNS_RGBD_ODOM_PID}"
   if ! [[ "$ODOM_PID" =~ ^[0-9]+$ ]]; then
-    echo "[gnns_vio_stack] ERROR: invalid rgbd_odometry PID '${ODOM_PID}' — check ${ODOM_LOG}" >&2
+    echo "[gnns_odom_stack] ERROR: invalid rgbd_odometry PID '${ODOM_PID}' — check ${ODOM_LOG}" >&2
     exit 1
   fi
-  echo "[gnns_vio_stack] rgbd_odometry PID=${ODOM_PID}"
-  echo "[gnns_vio_stack] Waiting for odometry on ${ODOM_TOPIC}…"
+  echo "[gnns_odom_stack] rgbd_odometry PID=${ODOM_PID}"
+  echo "[gnns_odom_stack] Waiting for odometry on ${ODOM_TOPIC}…"
   if ! wait_for_topic "${ODOM_TOPIC}" 60; then
-    echo "[gnns_vio_stack] ERROR: no odometry on ${ODOM_TOPIC}. Check ${ODOM_LOG} and ${RS_LOG}" >&2
+    echo "[gnns_odom_stack] ERROR: no odometry on ${ODOM_TOPIC}. Check ${ODOM_LOG} and ${RS_LOG}" >&2
     echo "--- last 40 lines of ${ODOM_LOG} ---" >&2
     tail -n 40 "${ODOM_LOG}" 2>/dev/null >&2 || true
     exit 1
@@ -783,23 +639,21 @@ launch_stack() {
     exit 1
   fi
 
-  launch_rtabmap_slam
-  cleanup
-  trap - EXIT INT TERM
+  echo "[gnns_odom_stack] Odom stack ready (no SLAM). Ctrl+C to stop." >&2
+  while true; do sleep 3600; done
 }
 
 # -----------------------------------------------------------------------------
-# gNNS Python mission (odometry source from env, default ros2 → /odom)
+# gNNS Python mission (RTABMapOdom ros2 → /odom, or gnns_vio for Python VIO core)
 # -----------------------------------------------------------------------------
 launch_mission() {
   local ROOT="${GNNS_PROJECT_ROOT:-$PROJECT_ROOT}"
+  local VS="${GNNS_MISSION_VIO_SOURCE:-ros2}"
   export PYTHONPATH="${ROOT}:${PYTHONPATH:-}"
   cd "$ROOT"
-  local _vio="${GNNS_MISSION_VIO_SOURCE:-ros2}"
-  echo "[gnns_vio_stack] gNNS mission from ${ROOT}"
-  echo "  Odometry: --vio-source ${_vio}  (override with GNNS_MISSION_VIO_SOURCE)"
-  echo "  Ensure config/vio_config.yaml matches (odom_topic / odom_source)."
-  exec python3 -m gnns_drone --vio-source "${_vio}" "$@"
+  echo "[gnns_odom_stack] gNNS mission from ${ROOT} (vio-source=${VS})"
+  echo "  Ensure config/vio_config.yaml matches (odom_topic for ros2; vio.* for gnns_vio)"
+  exec python3 -m gnns_drone --vio-source "${VS}" "$@"
 }
 
 # -----------------------------------------------------------------------------
@@ -828,11 +682,11 @@ case "$MODE" in
   realsense)
     launch_realsense
     ;;
-  rtabmap)
-    launch_rtabmap_with_odom
+  odom)
+    launch_odom_rgbd_only
     ;;
   stack)
-    launch_stack
+    launch_odom_stack
     ;;
   mission)
     launch_mission "$@"
@@ -841,14 +695,14 @@ case "$MODE" in
     cmd_diagnose
     ;;
   help|--help|-h)
-    sed -n '1,55p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '1,45p' "$0" | sed 's/^# \{0,1\}//'
     echo ""
-    echo "Extra command:  diagnose  — list camera/imu/odom topics"
+    echo "Commands:  realsense | odom | stack | mission | diagnose | help"
     echo ""
-    echo "Logs (stack / rtabmap): ${RS_LOG} , ${ODOM_LOG} , ${RT_LOG}"
+    echo "Logs: ${RS_LOG} , ${ODOM_LOG}"
     ;;
   *)
-    echo "Unknown mode: $MODE — use: realsense | rtabmap | stack | mission | diagnose | help" >&2
+    echo "Unknown mode: $MODE — use: realsense | odom | stack | mission | diagnose | help" >&2
     exit 1
     ;;
 esac

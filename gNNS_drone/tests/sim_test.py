@@ -376,6 +376,12 @@ def test_full_mission():
     print("\n" + "=" * 60)
     print("  MISSION RESULTS")
     print("=" * 60)
+    if not results:
+        print("  ❌ No waypoint position samples (LOCAL_POSITION_NED missing).")
+        print("=" * 60)
+        bridge.disconnect()
+        return False
+
     for r in results:
         status = "✅" if r["arrived"] else "⚠️"
         print(f"  WP{r['wp']}: {status} error={r['error_m']:.2f}m")

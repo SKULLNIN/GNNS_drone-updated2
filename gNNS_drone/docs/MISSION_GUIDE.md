@@ -65,7 +65,7 @@ This installs Python dependencies from `requirements.txt`:
 - `pyrealsense2` -- RealSense camera (if using standalone mode)
 - `pyyaml` -- Configuration files
 - `numpy` -- Math
-- `opencv-python` -- Target detection
+- `opencv-contrib-python` -- Target detection / vision (see requirements.txt)
 - `rplidar-roboticia` -- LiDAR (optional)
 
 ### 2.2 Serial port access (udev rule)
@@ -246,7 +246,7 @@ Key fields:
 Odometry source selection, camera settings, LiDAR parameters.
 
 Key fields:
-- `ros2_odom.odom_source`: `"ros2"` for RTAB-Map or `"orbslam3"` for ORB-SLAM3
+- `ros2_odom.odom_source`: `"ros2"` or `"rtabmap"` for `/odom` (e.g. `rgbd_odometry`), `"orbslam3"` for ORB-SLAM3, `"gnns_vio"` for Python `VIOTracker` / `VIOAlgorithm`, or `"t265_raw"` / `"simulated"` / `"voxl"` per `create_odom_provider`
 - `ros2_odom.odom_topic`: `/odom`
 - `ros2_odom.odom_frame_convention`: `"ros_enu_to_ned"`
 
@@ -302,7 +302,7 @@ python3 -m gnns_drone
 | `--sitl` | SITL mode (connect to `tcp:127.0.0.1:5760`) |
 | `--demo` | Use 5 demo waypoints (skip GPS input) |
 | `--interactive` / `-i` | Interactive mode: takeoff, then enter coordinates live |
-| `--vio-source SOURCE` | `ros2`, `orbslam3`, `t265_raw`, or `simulated` |
+| `--vio-source SOURCE` | `ros2`, `rtabmap`, `orbslam3`, `gnns_vio`, `t265_raw`, `simulated`, or `voxl` |
 | `--config PATH` | Custom MAVLink config YAML |
 
 ### Coordinate input

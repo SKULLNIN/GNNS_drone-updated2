@@ -190,9 +190,11 @@ class VIOTracker:
         Returns None when running in T265 or simulated mode (those modes
         do not produce a VIOState; use get_pose() instead).
         """
-        if hasattr(self, "_vio_state"):
-            return self._vio_state
-        return None
+        import copy
+
+        with self._pose_lock:
+            st = getattr(self, "_vio_state", None)
+            return copy.copy(st) if st is not None else None
 
     def _set_status(self, new_status: VIOStatus):
         """Update status and fire callbacks."""
@@ -406,6 +408,8 @@ class VIOTracker:
         imu_deque: deque = deque(maxlen=500)
 
         # ---- Configure RealSense pipeline -----------------------------------
+        pipe = None
+        pipe_started = False
         try:
             pipe = rs.pipeline()
             cfg  = rs.config()
@@ -436,6 +440,7 @@ class VIOTracker:
                 )
 
             profile = pipe.start(cfg)
+            pipe_started = True
             device  = profile.get_device()
             logger.info(f"D455/D435i connected: {device.get_info(rs.camera_info.name)}")
             logger.info(f"  Serial: {device.get_info(rs.camera_info.serial_number)}")
@@ -461,7 +466,15 @@ class VIOTracker:
         except Exception as e:
             logger.error(f"D455/D435i init failed: {e}")
             self._set_status(VIOStatus.LOST)
-            algo.stop()
+            try:
+                algo.stop()
+            except Exception:
+                pass
+            if pipe_started and pipe is not None:
+                try:
+                    pipe.stop()
+                except Exception:
+                    pass
             return
 
         self._set_status(VIOStatus.INITIALIZING)
@@ -532,10 +545,10 @@ class VIOTracker:
 
                 # ---- Run VIO pipeline -------------------------------------
                 vio_state = algo.process_frame(color_img, depth_img, imu_samples)
-                self._vio_state = vio_state
 
                 # ---- Map VIOState → VIOPose (backward compat) ------------
                 with self._pose_lock:
+                    self._vio_state = vio_state
                     self._pose.timestamp  = vio_state.timestamp
                     self._pose.x          = vio_state.north
                     self._pose.y          = vio_state.east

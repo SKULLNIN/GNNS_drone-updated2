@@ -26,7 +26,13 @@ import threading
 from pathlib import Path
 from typing import Optional
 from .mavlink_bridge import MAVLinkBridge
-from .rtabmap_odom import RTABMapOdom, OdomData, create_odom_provider, _load_vio_config
+from .rtabmap_odom import (
+    RTABMapOdom,
+    OdomData,
+    create_odom_provider,
+    _load_vio_config,
+    VIO_SOURCE_CHOICES,
+)
 from .flight_controller import FlightController, FlightConfig
 from .coordinate_utils import GPSCoord, NEDCoord, WaypointManager, gps_to_ned
 
@@ -714,11 +720,10 @@ def main():
                         help="Interactive mode: takeoff, then enter coordinates live")
     parser.add_argument("--vio-source", "--camera", dest="vio_source",
                         default=None,
-                        choices=["ros2", "rtabmap", "orbslam3", "t265_raw",
-                                 "simulated", "voxl"],
-                        help="Odometry source: ros2/rtabmap=RTAB-Map, "
-                             "orbslam3=ORB-SLAM3, t265_raw, simulated, voxl "
-                             "(default from vio_config.yaml odom_source)")
+                        choices=VIO_SOURCE_CHOICES,
+                        help="Odometry source: ros2/rtabmap=RTAB-Map (/odom), "
+                             "orbslam3, gnns_vio=Python VIOTracker, t265_raw, "
+                             "simulated, voxl (default from vio_config.yaml odom_source)")
     args = parser.parse_args()
 
     logging.basicConfig(
