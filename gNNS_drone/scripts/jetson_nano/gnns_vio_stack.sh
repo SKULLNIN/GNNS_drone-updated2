@@ -95,7 +95,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 JETSON_DIR="$SCRIPT_DIR"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-ROS_DISTRO="${ROS_DISTRO:-humble}"
+if [[ -z "${ROS_DISTRO:-}" ]]; then
+  case "$(lsb_release -cs 2>/dev/null)" in
+    noble)  ROS_DISTRO="jazzy"  ;;  # Ubuntu 24.04
+    jammy)  ROS_DISTRO="humble" ;;  # Ubuntu 22.04
+    *)      ROS_DISTRO="humble" ;;
+  esac
+fi
 SETUP="/opt/ros/${ROS_DISTRO}/setup.bash"
 if [[ ! -f "$SETUP" ]]; then
   echo "[gnns_vio_stack] ERROR: Missing $SETUP — install ROS 2 ${ROS_DISTRO}" >&2

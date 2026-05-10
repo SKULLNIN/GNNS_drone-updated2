@@ -12,6 +12,12 @@
 
 set -e
 
+if [[ "$(lsb_release -rs 2>/dev/null)" == "24.04" ]]; then
+  echo "[$(basename "$0")] Refusing to run on Ubuntu 24.04 (Noetic / Gazebo 11 unsupported)." >&2
+  echo "  Use: bash gnns_ubuntu24.sh install   (ROS 2 Jazzy + Gazebo Harmonic)" >&2
+  exit 2
+fi
+
 echo "=========================================="
 echo " gNNS Gazebo SITL Setup"
 echo "=========================================="

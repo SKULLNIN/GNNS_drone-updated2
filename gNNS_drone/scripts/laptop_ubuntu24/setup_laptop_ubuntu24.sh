@@ -16,8 +16,8 @@
 #   "humble" (Ubuntu 22.04 only) and sitl/setup_*.sh use ROS Noetic + Gazebo
 #   11 (Ubuntu 20.04 only). Neither pair is available on 24.04. This script
 #   targets the supported 24.04 stack: ROS 2 Jazzy + Gazebo Harmonic, and
-#   exports ROS_DISTRO=jazzy so the Jetson scripts (which read
-#   ${ROS_DISTRO:-humble}) work unmodified on this laptop.
+#   exports ROS_DISTRO=jazzy so Jetson helper scripts (which default
+#   to jazzy on noble / humble on jammy) stay aligned on this laptop.
 #
 # Usage:
 #   bash scripts/laptop_ubuntu24/setup_laptop_ubuntu24.sh [--minimal|--with-ros|--with-sitl|--all] [--tune-network] [--yes]
@@ -157,7 +157,7 @@ install_base_apt() {
     software-properties-common pkg-config cmake ninja-build unzip \
     python3 python3-venv python3-pip python3-dev \
     ffmpeg v4l-utils libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 udev \
-    setserial usbutils
+    setserial usbutils tmux
 
   # Hardware groups for MAVLink USB / serial / RealSense.
   for grp in dialout plugdev video; do
@@ -359,6 +359,7 @@ install_sitl_gazebo() {
     ok "ardupilot_gazebo already present"
   fi
   (
+    export GZ_VERSION="${GZ_VERSION:-harmonic}"
     cd "$plugin_src"
     mkdir -p build
     cd build
@@ -368,6 +369,7 @@ install_sitl_gazebo() {
 
   cat <<EOF | ensure_bashrc_block
 # ArduPilot + Gazebo Harmonic plugin paths
+export GZ_VERSION=\${GZ_VERSION:-harmonic}
 export GZ_SIM_SYSTEM_PLUGIN_PATH=\${GZ_SIM_SYSTEM_PLUGIN_PATH:-}:$plugin_src/build
 export GZ_SIM_RESOURCE_PATH=\${GZ_SIM_RESOURCE_PATH:-}:$plugin_src/models:$plugin_src/worlds
 export PATH=\$PATH:$apdir/Tools/autotest
@@ -457,12 +459,14 @@ Next steps:
 Notes:
   * If you need rclpy in the same process as gnns_drone, switch to
     .venv-py312 — Python 3.14 cannot import rclpy on Jazzy.
-  * Existing scripts in scripts/jetson_nano/*.sh default ROS_DISTRO to
-    "humble"; this script exports ROS_DISTRO=jazzy in ~/.bashrc so they
-    work on this laptop without edits.
-  * The Noetic-based scripts (sitl/setup_*.sh, start_simulation.sh) are
-    NOT used on Ubuntu 24.04 — Noetic and Gazebo 11 are not packaged for
-    24.04. Use this script's Gazebo Harmonic + ArduPilot SITL path.
+  * scripts/jetson_nano/*.sh pick ROS_DISTRO from Ubuntu codename (noble=jazzy,
+    jammy=humble) unless ROS_DISTRO is already set; this script also sets
+    ROS_DISTRO=jazzy in ~/.bashrc on the laptop.
+  * The Noetic-based scripts (sitl/setup_*.sh, start_simulation.sh) refuse to
+    run on Ubuntu 24.04 — use gnns_ubuntu24.sh instead.
+
+Run full SITL + Gazebo Harmonic + demo mission:
+  bash $REPO_ROOT/gnns_ubuntu24.sh fly
 ============================================================================
 EOF
 }

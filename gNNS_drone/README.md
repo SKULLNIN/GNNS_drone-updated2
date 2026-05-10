@@ -21,6 +21,16 @@ CubeOrange (Flight Controller)
 
 ## Quick Start
 
+**On Ubuntu 24.04 (laptop — ROS 2 Jazzy + Gazebo Harmonic + SITL):**
+
+```bash
+bash gnns_ubuntu24.sh install    # one-time
+bash gnns_ubuntu24.sh doctor    # verify
+bash gnns_ubuntu24.sh fly       # Gazebo + ArduPilot SITL + demo mission (tmux)
+```
+
+Details: [docs/UBUNTU24_QUICKSTART.md](docs/UBUNTU24_QUICKSTART.md). Do not use `start_simulation.sh` or `sitl/setup_gazebo.sh` on 24.04 (Noetic / Gazebo Classic only).
+
 **On a development machine (Windows/Linux):**
 ```bash
 # 1. Install dependencies
