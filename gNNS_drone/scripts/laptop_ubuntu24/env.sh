@@ -61,8 +61,9 @@ Subcommands:
   sitl       Start ArduPilot SITL for Harmonic JSON plugin [-- extra sim_vehicle args]
   mission    Run demo mission against tcp:127.0.0.1:5760 (uses .venv-py312)
   web        Start web_control on GNNS_WEB_PORT (default 5000)
-  fly        tmux: gazebo + sitl + mission; use --no-attach to skip tmux attach
+  fly        tmux: gazebo -> sitl -> mission [--web] [--headless] [--no-attach]
   clean      Kill gnns tmux session and common simulation processes
+  status     Show tmux session, gnns processes and listening ports
   help       This message
 
 Do NOT use start_simulation.sh or sitl/setup_*.sh on 24.04 — they target Noetic + Gazebo 11.
@@ -247,6 +248,22 @@ gnns_web() {
 }
 
 # ---------------------------------------------------------------------------
+# Poll until 'gz topic -l' returns at least one topic, meaning gz-transport
+# is up. Avoids the fragile 'sleep 3' guess and matches what the Harmonic
+# plugin needs before sim_vehicle.py can establish the JSON link.
+_gnns_wait_gazebo_ready() {
+  local timeout="${1:-60}"
+  local deadline=$(( $(date +%s) + timeout ))
+  while (( $(date +%s) < deadline )); do
+    if timeout 3 gz topic -l 2>/dev/null | grep -q .; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+# ---------------------------------------------------------------------------
 _gnns_wait_sitl_heartbeat() {
   local timeout="${1:-90}"
   GNNS_SITL_TIMEOUT="$timeout" "${GNNS_VENV}/bin/python" - <<'PY'
@@ -267,11 +284,29 @@ PY
 }
 
 # ---------------------------------------------------------------------------
+# Apply readable, mouse-friendly tmux session options for the gnns session.
+_gnns_tmux_style() {
+  local s="$1"
+  tmux set-option -t "$s" mouse on            >/dev/null 2>&1 || true
+  tmux set-option -t "$s" history-limit 20000 >/dev/null 2>&1 || true
+  tmux set-option -t "$s" status-interval 2   >/dev/null 2>&1 || true
+  tmux set-option -t "$s" status-left  "[gnns] " >/dev/null 2>&1 || true
+  tmux set-option -t "$s" status-right "%H:%M:%S " >/dev/null 2>&1 || true
+  tmux set-window-option -t "$s" automatic-rename off >/dev/null 2>&1 || true
+}
+
+# ---------------------------------------------------------------------------
 gnns_fly() {
   local no_attach=0
+  local with_web=0
+  local headless=0
   local a
   for a in "$@"; do
-    [[ "$a" == "--no-attach" ]] && no_attach=1
+    case "$a" in
+      --no-attach) no_attach=1 ;;
+      --web)       with_web=1 ;;
+      --headless)  headless=1 ;;
+    esac
   done
 
   gnns_doctor || return 1
@@ -280,31 +315,75 @@ gnns_fly() {
 
   tmux has-session -t "$GNNS_TMUX_SESSION" 2>/dev/null && tmux kill-session -t "$GNNS_TMUX_SESSION"
 
-  # shellcheck disable=SC2016
+  local gz_args=()
+  (( headless == 1 )) && gz_args+=(--headless)
+
+  # 1) Gazebo Harmonic
   tmux new-session -d -s "$GNNS_TMUX_SESSION" -n gazebo \
-    "bash -lc 'source \"$REPO_ROOT/scripts/laptop_ubuntu24/env.sh\"; gnns_gazebo; exec bash'"
+    "bash -lc 'source \"$REPO_ROOT/scripts/laptop_ubuntu24/env.sh\"; gnns_gazebo ${gz_args[*]}; echo; echo \"[gazebo exited]\"; exec bash'"
+  _gnns_tmux_style "$GNNS_TMUX_SESSION"
 
-  tmux new-window -t "$GNNS_TMUX_SESSION" -n sitl \
-    "bash -lc 'source \"$REPO_ROOT/scripts/laptop_ubuntu24/env.sh\"; sleep 3; cd \"$ARDUPILOT_HOME\" && sim_vehicle.py -v ArduCopter -f JSON --add-param-file=\"$GZ_PLUGIN/config/gazebo-iris-gimbal.parm\" --no-mavproxy; exec bash'"
-
-  echo "[gnns] Waiting for SITL heartbeat on tcp:127.0.0.1:5760 ..."
-  if ! _gnns_wait_sitl_heartbeat "${GNNS_SITL_TIMEOUT:-90}"; then
-    echo "[gnns] Attach with: tmux attach -t $GNNS_TMUX_SESSION" >&2
+  echo "[gnns] Waiting for Gazebo transport (gz topic -l) ..."
+  if ! _gnns_wait_gazebo_ready "${GNNS_GAZEBO_TIMEOUT:-60}"; then
+    echo "[gnns] Gazebo did not come up — attach: tmux attach -t $GNNS_TMUX_SESSION" >&2
     return 1
   fi
+  echo "[gnns] Gazebo is up."
 
+  # 2) ArduPilot SITL (only after gz is ready)
+  tmux new-window -t "$GNNS_TMUX_SESSION" -n sitl \
+    "bash -lc 'source \"$REPO_ROOT/scripts/laptop_ubuntu24/env.sh\"; cd \"$ARDUPILOT_HOME\" && sim_vehicle.py -v ArduCopter -f JSON --add-param-file=\"$GZ_PLUGIN/config/gazebo-iris-gimbal.parm\" --no-mavproxy; echo; echo \"[sitl exited]\"; exec bash'"
+
+  echo "[gnns] Waiting for SITL heartbeat on tcp:127.0.0.1:5760 ..."
+  if ! _gnns_wait_sitl_heartbeat "${GNNS_SITL_TIMEOUT:-120}"; then
+    echo "[gnns] No heartbeat — attach: tmux attach -t $GNNS_TMUX_SESSION" >&2
+    return 1
+  fi
+  echo "[gnns] SITL heartbeat received."
+
+  # 3) Mission
   tmux new-window -t "$GNNS_TMUX_SESSION" -n mission \
-    "bash -lc 'source \"$REPO_ROOT/scripts/laptop_ubuntu24/env.sh\"; source \"${GNNS_VENV}/bin/activate\"; cd \"$REPO_ROOT\" && python -m gnns_drone --sitl --demo; exec bash'"
+    "bash -lc 'source \"$REPO_ROOT/scripts/laptop_ubuntu24/env.sh\"; source \"${GNNS_VENV}/bin/activate\"; cd \"$REPO_ROOT\" && python -m gnns_drone --sitl --demo; echo; echo \"[mission exited]\"; exec bash'"
+
+  # 4) Optional: web control UI
+  if (( with_web == 1 )); then
+    tmux new-window -t "$GNNS_TMUX_SESSION" -n web \
+      "bash -lc 'source \"$REPO_ROOT/scripts/laptop_ubuntu24/env.sh\"; source \"${GNNS_VENV}/bin/activate\"; cd \"$REPO_ROOT\" && python -m gnns_drone.web_control --sitl --port \"${GNNS_WEB_PORT}\"; echo; echo \"[web exited]\"; exec bash'"
+  fi
+
+  # Focus on the mission window so the user lands on the most relevant output.
+  tmux select-window -t "${GNNS_TMUX_SESSION}:mission" 2>/dev/null || true
 
   echo ""
   echo "============================================================================"
-  echo "  gNNS: tmux session '$GNNS_TMUX_SESSION' — windows: gazebo | sitl | mission"
+  echo "  gNNS: tmux session '$GNNS_TMUX_SESSION'"
+  if (( with_web == 1 )); then
+    echo "  Windows: gazebo | sitl | mission | web (http://localhost:${GNNS_WEB_PORT})"
+  else
+    echo "  Windows: gazebo | sitl | mission   (add --web to start web UI too)"
+  fi
   echo "  Attach:  tmux attach -t $GNNS_TMUX_SESSION"
+  echo "  Switch:  Ctrl+b then 0/1/2/3       Detach: Ctrl+b then d"
   echo "  Clean:   bash gnns_ubuntu24.sh clean"
   echo "============================================================================"
 
   if [[ "$no_attach" -eq 0 ]]; then
     tmux attach -t "$GNNS_TMUX_SESSION"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+gnns_status() {
+  echo "[status] tmux:"
+  tmux ls 2>/dev/null || echo "  (no tmux server running)"
+  echo
+  echo "[status] processes:"
+  pgrep -af '[g]z sim|[g]z-sim-server|[s]im_vehicle.py|[a]rducopter|python -m gnns_drone' \
+    || echo "  (none)"
+  echo
+  echo "[status] ports:"
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltn 2>/dev/null | awk 'NR==1 || /:5760|:5762|:5763|:14550|:5000/'
   fi
 }
 

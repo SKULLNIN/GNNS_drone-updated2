@@ -20,6 +20,7 @@ case "$cmd" in
   web)      gnns_web "$@" ;;
   fly)      gnns_fly "$@" ;;
   clean)    gnns_clean "$@" ;;
+  status)   gnns_status "$@" ;;
   help|-h|--help)
     gnns_help
     ;;
