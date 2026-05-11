@@ -410,16 +410,49 @@ class MissionRunner:
             time.sleep(2.0)
 
     def _phase_return_home(self):
-        """Return to home and land."""
+        """Return to home and land.
+
+        After the last waypoint we are on the ground and the FC has already
+        auto-disarmed; we MUST re-enter GUIDED, re-arm and take off again
+        before commanding velocity to (0,0) — otherwise the drone just sits
+        disarmed and the mission appears stuck.
+        """
         logger.info(f"\n{'='*55}")
-        logger.info("  RETURNING HOME")
+        logger.info("  RETURN-TO-HOME")
         logger.info(f"{'='*55}")
 
+        # Re-arm + takeoff if we landed/disarmed at the last waypoint.
+        if not self.bridge.is_armed():
+            logger.info("  RTH: re-entering GUIDED + re-arming")
+            if not self.bridge.set_mode("GUIDED"):
+                logger.error("  RTH: cannot set GUIDED — aborting RTH")
+                return
+            time.sleep(0.5)
+            arm_retries = 10 if self.sitl_mode else 3
+            if not self.bridge.arm(retries=arm_retries):
+                logger.error("  RTH: cannot arm — aborting RTH (drone stays grounded)")
+                return
+            time.sleep(1.0)
+            if not self.bridge.takeoff(self.config.takeoff_altitude):
+                logger.warning("  RTH: takeoff may not have reached full altitude")
+            time.sleep(3.0)
+
+        # Fly toward home (0,0) — _fly_to_ned logs distance periodically.
         self.fc.reset()
-        self._fly_to_ned(0, 0)
+        arrived = self._fly_to_ned(0, 0)
+        if not arrived:
+            logger.warning("  RTH: did not reach home in time — landing at current position")
+
+        # Land + observe disarm event so it is visible in the tmux log.
+        logger.info("  RTH: commanding LAND")
         self.bridge.land()
-        self.bridge.wait_landed(timeout=30)
-        logger.info("  HOME — Landed!")
+        landed = self.bridge.wait_landed(timeout=30)
+        if landed and not self.bridge.is_armed():
+            logger.info("  RTH: DISARMED — landed at HOME (auto-disarm)")
+        elif self.bridge.is_armed():
+            logger.warning("  RTH: still armed after wait_landed timeout")
+        else:
+            logger.info("  RTH: landed (disarm state unknown)")
 
     # ==============================================================
     # PID NAVIGATION (uses FlightController)
@@ -464,13 +497,18 @@ class MissionRunner:
             yaw = result[3] if len(result) > 3 else 0.0
             self.bridge.send_velocity_ned_yaw(vx, vy, vz, yaw)
 
-            # Rate-limited logging
-            elapsed = time.time() - start
-            if int(elapsed) % 3 == 0 and int(elapsed) != int(elapsed - dt):
-                speed = math.sqrt(vx**2 + vy**2)
-                logger.debug(f"    dist={distance:.1f}m "
-                             f"spd={speed:.2f}m/s "
-                             f"alt={data.altitude:.1f}m ")
+            # Rate-limited progress log (~every 2s) so tmux 'mission' window
+            # shows steady progress instead of going silent.
+            now = time.time()
+            if not hasattr(self, "_last_dist_log_time"):
+                self._last_dist_log_time = 0.0
+            if now - self._last_dist_log_time >= 2.0:
+                speed = math.sqrt(vx ** 2 + vy ** 2)
+                logger.info(
+                    f"    dist={distance:.1f}m  spd={speed:.2f}m/s  "
+                    f"alt={data.altitude:.1f}m  armed={self.bridge.is_armed()}"
+                )
+                self._last_dist_log_time = now
 
             # Maintain 20 Hz
             sleep_t = dt - (time.time() - loop_start)
