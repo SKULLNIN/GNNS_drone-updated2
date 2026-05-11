@@ -29,14 +29,18 @@ Use **`scripts/jetson_nano/gnns_vio_stack.sh`** when you want one script that:
 - Starts **`rgbd_odometry` as its own process** (`rtabmap_odom` package) with **`wait_imu_to_init:=false`** on the VO node, then launches **RTAB-Map SLAM** with **`visual_odometry:=false`** so mapping subscribes to external `/odom` — avoids combined-launch IMU/sync races that yield **no odometry**.
 - Uses the same tuned `rtabmap_args` presets (aligned depth, queue, approx sync).
 - Optionally runs the Python mission with `--vio-source ros2` after `/odom` is live.
+- Starts **`robot_state_publisher`** (default) with `config/gnns_viz_robot.urdf` so laptop RViz **`RobotModel`** and `/robot_description` work; disable with `GNNS_ROBOT_STATE_PUBLISHER=0`.
 
 ```bash
 chmod +x scripts/jetson_nano/gnns_vio_stack.sh
 
+# One-time deps (Humble); add robot-state-publisher for RViz RobotModel body:
+# sudo apt install -y ros-humble-robot-state-publisher
+
 # Terminal A — full stack (camera in background, RTAB-Map + viz in foreground)
 ./scripts/jetson_nano/gnns_vio_stack.sh stack
 
-# Competition profile (IMU + Madgwick + EKF + accurate preset @ 30 Hz) — installs: robot-localization
+# Competition profile (IMU + Madgwick + EKF + accurate preset @ 30 Hz)
 ./scripts/jetson_nano/gnns_vio_stack.sh competition
 
 # Terminal B — FC + mission (after /odom is publishing)
@@ -55,7 +59,7 @@ producing `/imu/data` (orientation-bearing) consumed by `rgbd_odometry`
 
 ```bash
 # Install one-time:
-sudo apt install -y ros-humble-imu-filter-madgwick ros-humble-robot-localization
+sudo apt install -y ros-humble-imu-filter-madgwick ros-humble-robot-localization ros-humble-robot-state-publisher
 
 # Equivalent one-liner (same defaults as `./gnns_vio_stack.sh competition`):
 GNNS_USE_IMU=1 GNNS_USE_EKF=1 GNNS_RS_FPS=30 GNNS_RTABMAP_PRESET=accurate \

@@ -1,0 +1,34 @@
+<?xml version="1.0"?>
+<!--
+  Minimal body for RViz RobotModel. rgbd_odometry publishes TF odom -> camera_link
+  (see GNNS_CAMERA_FRAME in gnns_vio_stack.sh). This file adds a fixed body box so
+  RobotModel has something to render; adjust origin/size to match your drone.
+-->
+<robot name="gnns_viz_marker">
+  <link name="camera_link">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.02"/>
+      <inertia ixx="1e-5" ixy="0" ixz="0" iyy="1e-5" iyz="0" izz="1e-5"/>
+    </inertial>
+  </link>
+
+  <link name="body_link">
+    <visual>
+      <origin xyz="0 0 0.04" rpy="0 0 0"/>
+      <geometry><box size="0.22 0.22 0.07"/></geometry>
+      <material name="orange"><color rgba="0.95 0.45 0.1 0.9"/></material>
+    </visual>
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.8"/>
+      <inertia ixx="0.005" ixy="0" ixz="0" iyy="0.005" iyz="0" izz="0.008"/>
+    </inertial>
+  </link>
+
+  <joint name="camera_to_body" type="fixed">
+    <parent link="camera_link"/>
+    <child link="body_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+</robot>

@@ -92,6 +92,8 @@
 #   GNNS_QOS / GNNS_QOS_IMU=2 / GNNS_QOS_ODOM=0   QoS overrides (do NOT force qos_odom=2)
 #   GNNS_ODOM_SENSOR_SYNC=1|0  rtabmap odom_sensor_sync (try 0 if odom/image timestamps fight)
 #   GNNS_STACK_CAMERA_WAIT_SEC=10  sleep after RealSense starts before checking topics
+#   GNNS_ROBOT_STATE_PUBLISHER=0|1 Start robot_state_publisher for RViz RobotModel (default 1).
+#   GNNS_ROBOT_DESCRIPTION_FILE=... Default config/gnns_viz_robot.urdf (camera_link→body_link; match GNNS_CAMERA_FRAME)
 #   GNNS_ODOM_FRAME / GNNS_CAMERA_FRAME  must match rgbd_odometry TF (default odom / camera_link)
 #
 #   GPU/CUDA — ros-*-rtabmap-* packages use CPU OpenCV; no env flag moves this stack to the GPU.
@@ -105,6 +107,8 @@
 #   GNNS_RS_UNITE_IMU_METHOD=2       Try 0 or 1 if HID / bad optional access persists.
 #   GNNS_ODOM_MAX_RATE — cap rgbd_odometry publish rate (Hz); default = GNNS_RS_FPS
 #   GNNS_RTABMAP_DETECTION_RATE — loop-closure / hypothesis checks per second (default preset=2)
+#   GNNS_RTABMAP_OPTIMIZE_MAX_ERROR — optional; RTAB-Map RGBD/OptimizeMaxError (default ~3). Raise (e.g. 4)
+#                         only if graph optimization often rejects good loops; lowering tightens safety.
 #   GNNS_APPROX_SYNC_MAX — default 0.10 s (motion/jitter tolerant; 0.04 only if CPU keeps up)
 #   GNNS_QUEUE_SIZE — default 10 for rgbd_odometry + rtabmap (balance lag vs starvation)
 #   GNNS_USE_RGBD_SYNC=0|1 — opt-in fused rgbd_image stream (rtabmap_sync/rgbd_sync)
@@ -217,6 +221,10 @@ GNNS_EKF_CONFIG="${GNNS_EKF_CONFIG:-$PROJECT_ROOT/config/ekf_vio.yaml}"
 GNNS_EKF_ODOM_TOPIC="${GNNS_EKF_ODOM_TOPIC:-/odometry/filtered}"
 GNNS_MADGWICK_PID=""
 GNNS_EKF_PID=""
+GNNS_RSP_PID=""
+# Publish URDF + static TF camera_link→body for RViz RobotModel (see config/gnns_viz_robot.urdf)
+GNNS_ROBOT_STATE_PUBLISHER="${GNNS_ROBOT_STATE_PUBLISHER:-1}"
+GNNS_ROBOT_DESCRIPTION_FILE="${GNNS_ROBOT_DESCRIPTION_FILE:-$PROJECT_ROOT/config/gnns_viz_robot.urdf}"
 # RealSense motion module (HID): D455 sometimes reports
 # "HID Motion Sensor Failure! bad optional access" on Jetson/USB — see docs.
 GNNS_RS_IMU_STREAMS="${GNNS_RS_IMU_STREAMS:-1}"
@@ -463,6 +471,10 @@ build_rtab_rargs() {
     RTAB_RARGS="${RTAB_RARGS} --Rtabmap/DetectionRate ${GNNS_RTABMAP_DETECTION_RATE}"
   fi
   RTAB_SLAM_RARGS="$(strip_rtabargs_for_slam_node "${RTAB_RARGS}")"
+  # Slam-only: loop-closure graph check (do not pass RGBD/OptimizeMaxError to rgbd_odometry).
+  if [[ -n "${GNNS_RTABMAP_OPTIMIZE_MAX_ERROR:-}" ]]; then
+    RTAB_SLAM_RARGS="${RTAB_SLAM_RARGS} --RGBD/OptimizeMaxError ${GNNS_RTABMAP_OPTIMIZE_MAX_ERROR}"
+  fi
 }
 
 # Common RealSense launch arguments
@@ -597,6 +609,42 @@ require_ros_pkg() {
     echo "[gnns_vio_stack] ERROR: ROS 2 package '${pkg}' not found." >&2
     echo "  Install: ${hint}" >&2
     exit 2
+  fi
+}
+
+# Optional minimal URDF: parent link must match GNNS_CAMERA_FRAME (default camera_link).
+launch_robot_state_publisher_maybe() {
+  if [[ "${GNNS_ROBOT_STATE_PUBLISHER:-1}" != "1" ]]; then
+    return 0
+  fi
+  local urdf="${GNNS_ROBOT_DESCRIPTION_FILE:-${PROJECT_ROOT}/config/gnns_viz_robot.urdf}"
+  if [[ ! -f "$urdf" ]]; then
+    echo "[gnns_vio_stack] WARN: URDF not found (${urdf}) — skip robot_state_publisher" >&2
+    return 0
+  fi
+  if ! ros2 pkg prefix robot_state_publisher >/dev/null 2>&1; then
+    echo "[gnns_vio_stack] WARN: package robot_state_publisher missing — RViz RobotModel needs:" >&2
+    echo "  sudo apt install -y ros-${ROS_DISTRO}-robot-state-publisher" >&2
+    return 0
+  fi
+  local tmpcf
+  tmpcf="$(mktemp "${TMPDIR:-/tmp}/gnns_rsp.XXXXXX.yaml")"
+  {
+    printf '%s\n' '/robot_state_publisher:' '  ros__parameters:' '    robot_description: |'
+    sed 's/^/      /' "$urdf"
+  } >"${tmpcf}"
+  local slog="${LOG_DIR}/gnns_robot_state.log"
+  : >"${slog}"
+  ros2 run robot_state_publisher robot_state_publisher --ros-args \
+    --params-file "${tmpcf}" >>"${slog}" 2>&1 &
+  GNNS_RSP_PID=$!
+  rm -f "${tmpcf}"
+  echo "[gnns_vio_stack] robot_state_publisher PID=${GNNS_RSP_PID}  URDF=${urdf}"
+  sleep 0.5
+  if ! kill -0 "${GNNS_RSP_PID}" 2>/dev/null; then
+    echo "[gnns_vio_stack] WARN: robot_state_publisher exited — see ${slog}" >&2
+    tail -n 25 "${slog}" 2>/dev/null >&2 || true
+    GNNS_RSP_PID=""
   fi
 }
 
@@ -921,6 +969,9 @@ launch_rtabmap_with_odom() {
   cleanup_odom() {
     echo "[gnns_vio_stack] Stopping rgbd_odometry (PID=${ODOM_PID})…"
     kill_process_tree "${ODOM_PID}"
+    if [[ -n "${GNNS_RSP_PID:-}" ]] && [[ "${GNNS_RSP_PID}" =~ ^[0-9]+$ ]]; then
+      kill_process_tree "${GNNS_RSP_PID}"
+    fi
     if [[ -n "${GNNS_EKF_PID:-}" ]] && [[ "${GNNS_EKF_PID}" =~ ^[0-9]+$ ]]; then
       echo "[gnns_vio_stack] Stopping EKF (PID=${GNNS_EKF_PID})…"
       kill_process_tree "${GNNS_EKF_PID}"
@@ -948,6 +999,7 @@ launch_rtabmap_with_odom() {
   if ! wait_for_tf_odom_camera_link 90; then
     exit 1
   fi
+  launch_robot_state_publisher_maybe
   local odom_min_hz="$(awk -v f="$ODOM_MAX_RATE" 'BEGIN{printf "%.1f", f/2}')"
   wait_for_topic_hz "${ODOM_TOPIC}" "${odom_min_hz}" 6 || \
     echo "[gnns_vio_stack] WARN: ${ODOM_TOPIC} below ${odom_min_hz} Hz — VO may be unhealthy" >&2
@@ -1004,6 +1056,9 @@ launch_stack() {
     fi
     if [[ -n "${GNNS_MADGWICK_PID:-}" ]] && [[ "${GNNS_MADGWICK_PID}" =~ ^[0-9]+$ ]]; then
       kill_process_tree "${GNNS_MADGWICK_PID}"
+    fi
+    if [[ -n "${GNNS_RSP_PID:-}" ]] && [[ "${GNNS_RSP_PID}" =~ ^[0-9]+$ ]]; then
+      kill_process_tree "${GNNS_RSP_PID}"
     fi
     kill_process_tree "${RS_PID}"
   }
@@ -1065,6 +1120,7 @@ launch_stack() {
   if ! wait_for_tf_odom_camera_link 90; then
     exit 1
   fi
+  launch_robot_state_publisher_maybe
   local odom_min_hz="$(awk -v f="$ODOM_MAX_RATE" 'BEGIN{printf "%.1f", f/2}')"
   wait_for_topic_hz "${ODOM_TOPIC}" "${odom_min_hz}" 6 || \
     echo "[gnns_vio_stack] WARN: ${ODOM_TOPIC} below ${odom_min_hz} Hz — VO may be unhealthy" >&2
@@ -1156,7 +1212,7 @@ cmd_ekf() {
 # -----------------------------------------------------------------------------
 cmd_diagnose() {
   echo "=== ros2 topic list (camera / imu / odom / rtabmap) ==="
-  ros2 topic list 2>/dev/null | grep -E -i 'camera|imu|odom|rtabmap|filtered' || true
+  ros2 topic list 2>/dev/null | grep -E -i 'camera|imu|odom|rtabmap|filtered|robot_description' || true
   echo ""
   echo "=== Average rates over 5s (skipped if topic absent) ==="
   for t in "${IMU_TOPIC}" "${GNNS_IMU_FILTERED_TOPIC}" "${ODOM_TOPIC}" "${GNNS_EKF_ODOM_TOPIC}"; do
@@ -1169,7 +1225,7 @@ cmd_diagnose() {
   echo "=== TF odom -> camera_link ==="
   timeout 3 ros2 run tf2_ros tf2_echo "${ODOM_FRAME_FOR_TF}" "${CAMERA_FRAME_FOR_TF}" 2>&1 | grep -m 1 'Translation' || echo "  (no transform — VO TF not connected)"
   echo ""
-  for L in "${RS_LOG}" "${MAD_LOG}" "${ODOM_LOG}" "${EKF_LOG}" "${RT_LOG}"; do
+  for L in "${RS_LOG}" "${MAD_LOG}" "${ODOM_LOG}" "${EKF_LOG}" "${RT_LOG}" "${LOG_DIR}/gnns_robot_state.log"; do
     [[ -f "$L" ]] || continue
     echo "--- tail -n 10 ${L} ---"
     tail -n 10 "$L" 2>/dev/null || true

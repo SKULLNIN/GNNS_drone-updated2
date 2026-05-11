@@ -6,6 +6,7 @@ Panels:
       Expanded:
         - /Global Options1
         - /TF1
+        - /RobotModel (gNNS body)1
         - /Camera1
         - /DepthCloud1
         - /Odometry1
@@ -65,6 +66,29 @@ Visualization Manager:
       Tree: {}
       Update Interval: 0
       Value: true
+    - Alpha: 1
+      Class: rviz_default_plugins/RobotModel
+      Collision Enabled: false
+      Description File: ""
+      Description Source: Topic
+      Description Topic:
+        Depth: 5
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /robot_description
+      Enabled: true
+      Links:
+        All Links Enabled: true
+        Expand Joint Details: false
+        Expand Link Details: false
+        Expand Tree: false
+        Link Tree Style: Links in Alphabetic Order
+      Name: RobotModel (gNNS body)
+      TF Prefix: ""
+      Update Interval: 0
+      Value: true
+      Visual Enabled: true
     - Class: rviz_default_plugins/Image
       Enabled: true
       Max Value: 1
