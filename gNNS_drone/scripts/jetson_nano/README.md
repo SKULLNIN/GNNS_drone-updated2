@@ -42,6 +42,32 @@ chmod +x scripts/jetson_nano/gnns_vio_stack.sh
 
 See the script header for `realsense` / `rtabmap` / `mission` / `diagnose` modes.
 
+### IMU-fused competition profile (default since v2)
+
+Both stack scripts default to **IMU-assisted** odometry with `imu_filter_madgwick`
+producing `/imu/data` (orientation-bearing) consumed by `rgbd_odometry`
+(`wait_imu_to_init` + `Odom/GuessMotion`) and `rtabmap_slam`. Optional
+`robot_localization` EKF (`GNNS_USE_EKF=1`) further smooths `/odom` into
+`/odometry/filtered`.
+
+```bash
+# Install one-time:
+sudo apt install -y ros-humble-imu-filter-madgwick ros-humble-robot-localization
+
+# Run with full IMU + EKF + accurate preset:
+GNNS_USE_IMU=1 GNNS_USE_EKF=1 GNNS_RS_FPS=30 GNNS_RTABMAP_PRESET=accurate \
+  ./scripts/jetson_nano/gnns_vio_stack.sh stack
+
+# Then point the mission at the smoothed estimate:
+# config/vio_config.yaml → ros2_odom.odom_topic: "/odometry/filtered"
+```
+
+New CLI modes (both scripts): `imu` (Madgwick only), `ekf` (robot_localization only),
+extended `diagnose` (topic rates + TF + log tails). See
+[docs/RTABMAP_JETSON_README.md §3a](../../docs/RTABMAP_JETSON_README.md) for the full env-var matrix.
+
+To disable IMU fusion (legacy pure-visual): `GNNS_USE_IMU=0 GNNS_IMU_FILTER=0 GNNS_USE_EKF=0`.
+
 ### Odom-only stack (no SLAM / no map)
 
 Use **`scripts/jetson_nano/gnns_odom_stack.sh`** when you only need **RealSense + `rgbd_odometry`** publishing `/odom` and TF `odom`→`camera_link`, without RTAB-Map mapping or loop closure:

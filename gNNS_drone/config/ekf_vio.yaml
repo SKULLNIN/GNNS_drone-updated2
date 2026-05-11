@@ -1,0 +1,79 @@
+# ============================================================
+# gNNS Drone — robot_localization EKF for VIO smoothing
+# ------------------------------------------------------------
+# Fuses:
+#   odom0  : /odom         (nav_msgs/Odometry, from rgbd_odometry)
+#   imu0   : /imu/data     (sensor_msgs/Imu,  from imu_filter_madgwick)
+# Outputs:
+#   /odometry/filtered     (nav_msgs/Odometry)
+#
+# Loaded by scripts/jetson_nano/gnns_odom_stack.sh and gnns_vio_stack.sh
+# when GNNS_USE_EKF=1. Override path with GNNS_EKF_CONFIG.
+#
+# State (15D): x y z  roll pitch yaw  vx vy vz  vroll vpitch vyaw  ax ay az
+# odom0_config / imu0_config masks follow that order.
+# ============================================================
+ekf_filter_node:
+  ros__parameters:
+    frequency: 50.0
+    sensor_timeout: 0.2
+    two_d_mode: false
+    transform_time_offset: 0.0
+    transform_timeout: 0.05
+    print_diagnostics: true
+    debug: false
+
+    # rgbd_odometry already publishes TF odom -> camera_link. The EKF here
+    # produces a filtered odometry topic only; downstream consumers (gNNS mission,
+    # rtabmap_slam) can subscribe without competing TF publishers.
+    publish_tf: false
+    publish_acceleration: false
+
+    map_frame: map
+    odom_frame: odom
+    base_link_frame: camera_link
+    world_frame: odom
+
+    # ---- Odometry source: position only (orientation comes from IMU) -------
+    odom0: /odom
+    # x y z  r p y  vx vy vz  vr vp vy  ax ay az
+    odom0_config: [true,  true,  true,
+                   false, false, false,
+                   false, false, false,
+                   false, false, false,
+                   false, false, false]
+    odom0_differential: false
+    odom0_relative: false
+    odom0_queue_size: 30
+    odom0_nodelay: true
+
+    # ---- IMU source: orientation + angular velocity + linear acceleration ---
+    imu0: /imu/data
+    imu0_config: [false, false, false,
+                  true,  true,  true,
+                  false, false, false,
+                  true,  true,  true,
+                  true,  true,  false]
+    imu0_differential: false
+    imu0_relative: true
+    imu0_queue_size: 200
+    imu0_remove_gravitational_acceleration: true
+    imu0_nodelay: true
+
+    # ---- Process noise (3D) — values tuned for D455 + Madgwick at 200 Hz ----
+    # ROS 2 params: sequence must be one scalar type (use 0.0 not 0 alongside floats).
+    process_noise_covariance: [0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                               0.0, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                               0.0, 0.0, 0.06, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                               0.0, 0.0, 0.0, 0.03, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                               0.0, 0.0, 0.0, 0.0, 0.03, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                               0.0, 0.0, 0.0, 0.0, 0.0, 0.06, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                               0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.025, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                               0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.025, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                               0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.04, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                               0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.01, 0.0, 0.0, 0.0, 0.0, 0.0,
+                               0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.01, 0.0, 0.0, 0.0, 0.0,
+                               0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.02, 0.0, 0.0, 0.0,
+                               0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.01, 0.0, 0.0,
+                               0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.01, 0.0,
+                               0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.015]

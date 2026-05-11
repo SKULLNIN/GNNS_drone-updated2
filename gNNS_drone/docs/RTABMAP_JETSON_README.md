@@ -65,6 +65,89 @@ Override with `GNNS_*` env vars (see §5).
 
 ---
 
+## 3a. IMU-fused competition profile (recommended)
+
+`gnns_odom_stack.sh` and `gnns_vio_stack.sh` ship with an IMU-first pipeline that runs:
+
+`RealSense (gyro+accel) → imu_filter_madgwick → /imu/data → rgbd_odometry (wait_imu_to_init + GuessMotion) → /odom → robot_localization EKF → /odometry/filtered → mission/rtabmap`
+
+| Env var | Default | Purpose |
+|---------|---------|---------|
+| `GNNS_USE_IMU` | `1` | IMU-assisted rgbd_odometry + rtabmap SLAM (set 0 to fall back to pure visual) |
+| `GNNS_IMU_FILTER` | `1` | Launch `imu_filter_madgwick` so `sensor_msgs/Imu.orientation` is valid |
+| `GNNS_IMU_FILTERED_TOPIC` | `/imu/data` | Output of Madgwick (consumed by VO + SLAM + EKF) |
+| `GNNS_MADGWICK_GAIN` | `0.05` | Beta gain — lower = smoother, higher = more responsive |
+| `GNNS_MADGWICK_USE_MAG` | `0` | D455/D435i have no magnetometer; keep 0 |
+| `GNNS_GYRO_FPS` / `GNNS_ACCEL_FPS` | `200` / `250` | D455 IMU rates |
+| `GNNS_REALSENSE_INITIAL_RESET` | `1` | Power-cycle camera at launch (fixes `HID Motion Sensor Failure! bad optional access` on Jetson) |
+| `GNNS_REALSENSE_ENABLE_SYNC` | `1` | Frame stereo + IMU in one device clock domain |
+| `GNNS_USE_EKF` | `0` | Launch `robot_localization` ekf_node fusing `/odom` + `/imu/data` |
+| `GNNS_EKF_CONFIG` | `config/ekf_vio.yaml` | EKF parameter file (15-state, 3D) |
+| `GNNS_EKF_ODOM_TOPIC` | `/odometry/filtered` | EKF output (subscribe from mission for smoother estimates) |
+| `GNNS_HEALTH_HZ_GATE` | `1` | Verify minimum publish rate (IMU >= 100 Hz, /imu/data >= 50, /odom >= FPS/2) before declaring ready |
+| `GNNS_RS_IMU_STREAMS` | `1` | `1` = enable RealSense gyro+accel. Set **`0`** to turn off the motion module (visual VO only — use when HID/IMU is broken). Scripts then force **`GNNS_USE_IMU=0`** and **`GNNS_IMU_FILTER=0`**. |
+| `GNNS_RS_UNITE_IMU_METHOD` | `2` | RealSense IMU fusion: **`0`** = no merge, **`1`** = copy, **`2`** = linear interpolate. Try **`0`** or **`1`** if HID errors persist after a USB/power reset. |
+
+#### HID Motion Sensor Failure (`bad optional access`)
+
+If `rs-enumerate-devices` or `realsense2_camera` logs **`HID Motion Sensor Failure! bad optional access`**, the **BMI IMU HID path failed** — `/camera/camera/imu` will not publish usable data until the underlying issue is avoided or fixed.
+
+Try in order:
+
+1. **USB** — Different **USB3** port (no marginal hub); quality cable; **unplug ~10 s**, replug **before** launch.
+2. **Keep `GNNS_REALSENSE_INITIAL_RESET=1`** (default) so firmware gets a hardware reset at node start.
+3. **Alternate IMU merging** — e.g. `GNNS_RS_UNITE_IMU_METHOD=0 ./scripts/jetson_nano/gnns_vio_stack.sh stack`.
+4. **Bypass IMU in software** — **RGB‑D VO only:**
+   ```bash
+   GNNS_RS_IMU_STREAMS=0 ./scripts/jetson_nano/gnns_vio_stack.sh stack
+   ```
+5. **udev** — `sudo udevadm control --reload-rules && sudo udevadm trigger` after installing Intel rules; unplug/replug the camera.
+6. **Further reading** — [IntelRealSense realsense-ros#3416](https://github.com/realsenseai/realsense-ros/issues/3416) (“bad optional access”), Intel librealsense Jetson/HID discussions; align **SDK + firmware** with your platform recommendation.
+
+Required ROS 2 packages (Humble shown; substitute distro):
+
+```bash
+sudo apt install -y ros-humble-imu-filter-madgwick ros-humble-robot-localization
+```
+
+Competition launch (RTAB-Map SLAM + IMU + EKF):
+
+```bash
+cd ~/gNNS_drone
+source /opt/ros/humble/setup.bash
+GNNS_USE_IMU=1 GNNS_USE_EKF=1 GNNS_RS_FPS=30 GNNS_RTABMAP_PRESET=accurate \
+  ./scripts/jetson_nano/gnns_vio_stack.sh stack
+```
+
+Then in [config/vio_config.yaml](../config/vio_config.yaml) set the mission to consume the smoothed estimate:
+
+```yaml
+ros2_odom:
+  odom_source: "ros2"
+  odom_topic: "/odometry/filtered"
+```
+
+Incremental bring-up (one mode per terminal):
+
+```bash
+./scripts/jetson_nano/gnns_vio_stack.sh realsense   # T1
+./scripts/jetson_nano/gnns_vio_stack.sh imu         # T2  Madgwick → /imu/data
+./scripts/jetson_nano/gnns_vio_stack.sh rtabmap     # T3  rgbd_odometry + SLAM
+./scripts/jetson_nano/gnns_vio_stack.sh ekf         # T4  robot_localization → /odometry/filtered
+```
+
+Topic flow:
+
+```
+                         +-- /imu/data ---+--> rtabmap_slam
+realsense2_camera --IMU--> imu_filter_madgwick |
+                                                +--> rgbd_odometry --/odom--+--> robot_localization --/odometry/filtered--> mission
+realsense2_camera --rgb+depth+info--------------> rgbd_odometry             |
+                                                                            +--> rtabmap_slam (map)
+```
+
+---
+
 ## 4. Main script: `gnns_vio_stack.sh`
 
 **Working directory:** repository root (`gNNS_drone/`).
@@ -77,7 +160,9 @@ Override with `GNNS_*` env vars (see §5).
 | `./scripts/jetson_nano/gnns_vio_stack.sh realsense` | Camera + IMU only (foreground). |
 | `./scripts/jetson_nano/gnns_vio_stack.sh rtabmap` | Assumes RealSense **already running**; starts `rgbd_odometry` + RTAB-Map only. |
 | `./scripts/jetson_nano/gnns_vio_stack.sh mission --demo` | Runs `python3 -m gnns_drone --vio-source ros2` (after you have `/odom`). |
-| `./scripts/jetson_nano/gnns_vio_stack.sh diagnose` | Prints filtered `ros2 topic list` + hints for IMU topic. |
+| `./scripts/jetson_nano/gnns_vio_stack.sh imu` | Madgwick only (`/imu/data`) — requires RealSense IMU streams working. |
+| `./scripts/jetson_nano/gnns_vio_stack.sh ekf` | `robot_localization` EKF only — requires `/odom` + `/imu/data`. |
+| `./scripts/jetson_nano/gnns_vio_stack.sh diagnose` | Topic list, rates, TF, log tails. |
 | `./scripts/jetson_nano/gnns_vio_stack.sh help` | Dumps script header (env + usage). |
 
 ### Typical session (two terminals)

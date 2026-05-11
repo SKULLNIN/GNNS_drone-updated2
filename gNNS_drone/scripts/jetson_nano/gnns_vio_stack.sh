@@ -40,52 +40,76 @@
 #   chmod +x scripts/jetson_nano/gnns_vio_stack.sh
 #
 #   ./scripts/jetson_nano/gnns_vio_stack.sh realsense    # camera + IMU only
+#   ./scripts/jetson_nano/gnns_vio_stack.sh imu          # Madgwick filter only (RealSense running)
 #   ./scripts/jetson_nano/gnns_vio_stack.sh rtabmap      # rgbd_odometry + RTAB (camera up)
-#   ./scripts/jetson_nano/gnns_vio_stack.sh stack        # RealSense + odom + RTAB (recommended)
+#   ./scripts/jetson_nano/gnns_vio_stack.sh ekf          # robot_localization EKF only (/odom + /imu/data)
+#   ./scripts/jetson_nano/gnns_vio_stack.sh stack        # RealSense → Madgwick → rgbd_odometry → (EKF) → RTAB
 #   ./scripts/jetson_nano/gnns_vio_stack.sh mission --demo
+#   ./scripts/jetson_nano/gnns_vio_stack.sh diagnose     # Topic list + rates + TF + log tails
 #
-# Environment (important):
-#   GNNS_WAIT_IMU=0          # default — do NOT wait for IMU (fixes stuck message)
-#   GNNS_WAIT_IMU=1          # enable after: ros2 topic hz /camera/camera/imu works
-#   GNNS_IMU_TOPIC=/.../imu  # override if your IMU is on a different path (rgbd_odometry + wait_imu)
-#   GNNS_RTABMAP_IMU=0|1 — SLAM IMU: 0=do not use raw RealSense IMU (default; avoids orientation spam)
-#   GNNS_RTABMAP_IMU_TOPIC=/... — optional explicit imu topic for rtabmap SLAM (e.g. Madgwick output)
+# Competition default (IMU-fused VO, accurate preset, EKF-smoothed odometry, SLAM map):
+#   GNNS_USE_IMU=1 GNNS_USE_EKF=1 GNNS_RS_FPS=30 GNNS_RTABMAP_PRESET=accurate \
+#     ./scripts/jetson_nano/gnns_vio_stack.sh stack
+#
+# Environment — IMU pipeline (competition profile)
+#   GNNS_USE_IMU=1        ENABLE IMU-assisted VO (default).  rgbd_odometry uses wait_imu_to_init +
+#                         Odom/GuessMotion true; rtabmap_slam consumes ${GNNS_IMU_FILTERED_TOPIC}.
+#                         Set 0 to fall back to pure visual + GuessMotion false.
+#   GNNS_IMU_FILTER=1     Launch imu_filter_madgwick → ${GNNS_IMU_FILTERED_TOPIC} (default /imu/data).
+#                         Required for valid sensor_msgs/Imu.orientation. Set 0 to skip Madgwick.
+#   GNNS_IMU_FILTERED_TOPIC=/imu/data
+#   GNNS_MADGWICK_USE_MAG=0|1   Use magnetometer for yaw correction (D455 has none → 0).
+#   GNNS_MADGWICK_GAIN=0.05     Beta gain (lower = smoother, higher = more responsive).
+#   GNNS_MADGWICK_WORLD_FRAME=enu|nwu|ned
+#   GNNS_GYRO_FPS=200 GNNS_ACCEL_FPS=250    RealSense IMU rates (D455 max).
+#   GNNS_REALSENSE_INITIAL_RESET=1   Power-cycle RealSense at launch (fixes HID bad optional access).
+#   GNNS_REALSENSE_ENABLE_SYNC=1     Frame stereo+IMU in one clock domain (lower jitter).
+#   GNNS_HEALTH_HZ_GATE=1            After topic is up, also verify minimum publish rate.
+#
+# Environment — EKF (robot_localization, optional smoother)
+#   GNNS_USE_EKF=0|1      Launch ekf_node fusing /odom + /imu/data → /odometry/filtered.
+#                         Needs: sudo apt install ros-${ROS_DISTRO}-robot-localization
+#   GNNS_EKF_CONFIG=<path>            Default: config/ekf_vio.yaml (15-state, 3D).
+#   GNNS_EKF_ODOM_TOPIC=/odometry/filtered
+#
+# Environment — legacy / shared
+#   GNNS_WAIT_IMU=0|1        auto-set to 1 when GNNS_USE_IMU=1 + GNNS_IMU_FILTER=1.
+#   GNNS_IMU_TOPIC=/.../imu  override raw IMU subscriber (used by Madgwick + raw-IMU fallback).
+#   GNNS_RTABMAP_IMU=0|1 — legacy SLAM IMU toggle (0=dummy; honored when GNNS_USE_IMU=0).
+#   GNNS_RTABMAP_IMU_TOPIC=/... — optional explicit imu topic for rtabmap SLAM (overrides USE_IMU).
 #   GNNS_RTABMAP_VIZ — unset + DISPLAY set → rtabmap_viz ON; unset + no DISPLAY → OFF.
 #                        Set 0 or 1 explicitly to override (SSH: export GNNS_RTABMAP_VIZ=0).
-#   GNNS_LOG_DIR=/tmp        # RealSense + RTAB-Map logs
-#   GNNS_ODOM_TOPIC=/odom    # rgbd_odometry output + rtabmap input (default /odom)
-#   GNNS_WAIT_FOR_TRANSFORM=2.0   # rtabmap TF wait (seconds; larger tolerates stamp skew)
-#   GNNS_RTABMAP_NAMESPACE=rtabmap  # must match ros2 launch namespace (for param hooks)
-#   GNNS_RTABMAP_VIZ_SUBSCRIBE_ODOM=1  # set rtabmap_viz subscribe_odom=true (uses /odom vs TF stamp; reduces viz errors)
-#   GNNS_QOS — rtabmap base QoS for images (0=default; matches RealSense color/depth publishers)
-#   GNNS_QOS_IMU=2 — rtabmap IMU subscriber Best Effort (fixes IMU vs rtabmap mismatch)
-#   GNNS_QOS_ODOM=0 — rgbd_odometry image QoS (0=default; do NOT force 2 or odom may get NO camera data)
-#   GNNS_ODOM_SENSOR_SYNC=1|0 — rtabmap odom_sensor_sync (try 0 if odom/image timestamps fight)
-#   GNNS_STACK_CAMERA_WAIT_SEC=10 — sleep after RealSense starts before checking topics (stack mode)
-#   GNNS_ODOM_FRAME / GNNS_CAMERA_FRAME — must match rgbd_odometry TF (default odom / camera_link)
+#   GNNS_LOG_DIR=/tmp        RealSense + Madgwick + rgbd_odom + EKF + RTAB-Map logs
+#   GNNS_ODOM_TOPIC=/odom    rgbd_odometry output + rtabmap input
+#   GNNS_WAIT_FOR_TRANSFORM=2.0   rtabmap TF wait (seconds; larger tolerates stamp skew)
+#   GNNS_RTABMAP_NAMESPACE=rtabmap  must match ros2 launch namespace (for param hooks)
+#   GNNS_RTABMAP_VIZ_SUBSCRIBE_ODOM=1  set rtabmap_viz subscribe_odom=true (uses /odom vs TF stamp)
+#   GNNS_QOS / GNNS_QOS_IMU=2 / GNNS_QOS_ODOM=0   QoS overrides (do NOT force qos_odom=2)
+#   GNNS_ODOM_SENSOR_SYNC=1|0  rtabmap odom_sensor_sync (try 0 if odom/image timestamps fight)
+#   GNNS_STACK_CAMERA_WAIT_SEC=10  sleep after RealSense starts before checking topics
+#   GNNS_ODOM_FRAME / GNNS_CAMERA_FRAME  must match rgbd_odometry TF (default odom / camera_link)
+#
 #   GPU/CUDA — ros-*-rtabmap-* packages use CPU OpenCV; no env flag moves this stack to the GPU.
 #             Build OpenCV+RTAB-Map from source with CUDA to use the GPU; see docs/JETSON_LAPTOP_SETUP.md §11.
 #
 #   GNNS_RTABMAP_PRESET=default|recovery|accurate
-#       recovery — if you see "Not enough inliers 0/20" and odom quality=0:
-#         uses Frame-to-Frame odometry, lower MinInliers, ORB features (see below)
-#       accurate — F2M + GFTT, particle filter, tighter grid (CPU heavier; best map quality)
+#       recovery — F2F, lower MinInliers, ORB; use when GNNS_USE_IMU=0 and bootstrap fails.
+#       accurate — F2M + GFTT, MinInliers 12, GuessMotion on (with IMU); best for competition.
 #   GNNS_RS_FPS — default 15; on Jetson Orin try 30 after `ros2 topic hz /odom` is stable
-#   GNNS_ODOM_MAX_RATE — cap rgbd_odometry publish rate (Hz); default = GNNS_RS_FPS (was hardcoded 15)
-#   GNNS_RTABMAP_DETECTION_RATE — optional; loop-closure / hypothesis checks per second (default preset=2).
-#     Higher (e.g. 4–5) feels snappier on strong CPUs; costs more CPU.
-#   GNNS_APPROX_SYNC_MAX — default 0.10 s (motion/jitter tolerant; use 0.04 only if CPU keeps up)
-#   GNNS_QUEUE_SIZE — default 10 for rgbd_odometry + rtabmap (balance lag vs starvation under motion)
-#   If you see "extrapolation into the future" odom→camera_link: VO/TF stalled (lost track or CPU).
-#     Try: GNNS_RTABMAP_PRESET=default (F2M), GNNS_RTABMAP_VIZ=0, GNNS_RS_FPS=15, or looser sync/queue above.
-#   GNNS_USE_RGBD_SYNC=0|1 — opt-in: run rtabmap_sync/rgbd_sync before odom (single fused rgbd stream)
+#   GNNS_RS_IMU_STREAMS=1            Set 0 if HID Motion Sensor Failure — gyro/accel off (visual VO only).
+#   GNNS_RS_UNITE_IMU_METHOD=2       Try 0 or 1 if HID / bad optional access persists.
+#   GNNS_ODOM_MAX_RATE — cap rgbd_odometry publish rate (Hz); default = GNNS_RS_FPS
+#   GNNS_RTABMAP_DETECTION_RATE — loop-closure / hypothesis checks per second (default preset=2)
+#   GNNS_APPROX_SYNC_MAX — default 0.10 s (motion/jitter tolerant; 0.04 only if CPU keeps up)
+#   GNNS_QUEUE_SIZE — default 10 for rgbd_odometry + rtabmap (balance lag vs starvation)
+#   GNNS_USE_RGBD_SYNC=0|1 — opt-in fused rgbd_image stream (rtabmap_sync/rgbd_sync)
 #   GNNS_RGBD_TOPIC — output topic when GNNS_USE_RGBD_SYNC=1 (default /gnns_rgbd_image)
 #
 # Quick VIO test (two terminals on Jetson):
 #   Terminal A: ./scripts/jetson_nano/gnns_vio_stack.sh realsense
 #   Terminal B:
 #     ros2 topic hz /camera/camera/imu
-#     GNNS_WAIT_IMU=0 GNNS_RTABMAP_VIZ=0 ./scripts/jetson_nano/gnns_vio_stack.sh rtabmap
+#     GNNS_USE_IMU=1 GNNS_RTABMAP_VIZ=0 ./scripts/jetson_nano/gnns_vio_stack.sh rtabmap
 #
 # =============================================================================
 # Do not use set -u — ROS setup.bash references unset variables.
@@ -124,6 +148,8 @@ mkdir -p "$LOG_DIR"
 RS_LOG="${LOG_DIR}/gnns_realsense.log"
 RT_LOG="${LOG_DIR}/gnns_rtabmap.log"
 ODOM_LOG="${LOG_DIR}/gnns_rgbd_odometry.log"
+MAD_LOG="${LOG_DIR}/gnns_madgwick.log"
+EKF_LOG="${LOG_DIR}/gnns_ekf.log"
 # Set only by launch_rgbd_odometry_bg — read ODOM_PID from this; do not capture the function with $(...).
 GNNS_RGBD_ODOM_PID=""
 # Set only by launch_rgbd_sync_bg when GNNS_USE_RGBD_SYNC=1
@@ -151,18 +177,66 @@ else
 fi
 
 # -----------------------------------------------------------------------------
+# IMU pipeline (NEW — competition profile)
+# Madgwick fills sensor_msgs/Imu.orientation from raw gyro+accel, so rgbd_odometry
+# can do wait_imu_to_init + GuessMotion (big accuracy win) and rtabmap_slam stops
+# spamming "IMU received doesn't have orientation set, it is ignored".
+# -----------------------------------------------------------------------------
+GNNS_IMU_FILTER="${GNNS_IMU_FILTER:-1}"
+GNNS_IMU_FILTERED_TOPIC="${GNNS_IMU_FILTERED_TOPIC:-/imu/data}"
+GNNS_MADGWICK_USE_MAG="${GNNS_MADGWICK_USE_MAG:-0}"
+GNNS_MADGWICK_GAIN="${GNNS_MADGWICK_GAIN:-0.05}"
+GNNS_MADGWICK_WORLD_FRAME="${GNNS_MADGWICK_WORLD_FRAME:-enu}"
+GNNS_USE_IMU="${GNNS_USE_IMU:-1}"
+GNNS_REALSENSE_INITIAL_RESET="${GNNS_REALSENSE_INITIAL_RESET:-1}"
+GNNS_REALSENSE_ENABLE_SYNC="${GNNS_REALSENSE_ENABLE_SYNC:-1}"
+GNNS_GYRO_FPS="${GNNS_GYRO_FPS:-200}"
+GNNS_ACCEL_FPS="${GNNS_ACCEL_FPS:-250}"
+GNNS_IMU_QUEUE_SIZE="${GNNS_IMU_QUEUE_SIZE:-200}"
+GNNS_HEALTH_HZ_GATE="${GNNS_HEALTH_HZ_GATE:-1}"
+GNNS_USE_EKF="${GNNS_USE_EKF:-0}"
+GNNS_EKF_CONFIG="${GNNS_EKF_CONFIG:-$PROJECT_ROOT/config/ekf_vio.yaml}"
+GNNS_EKF_ODOM_TOPIC="${GNNS_EKF_ODOM_TOPIC:-/odometry/filtered}"
+GNNS_MADGWICK_PID=""
+GNNS_EKF_PID=""
+# RealSense motion module (HID): D455 sometimes reports
+# "HID Motion Sensor Failure! bad optional access" on Jetson/USB — see docs.
+GNNS_RS_IMU_STREAMS="${GNNS_RS_IMU_STREAMS:-1}"
+GNNS_RS_UNITE_IMU_METHOD="${GNNS_RS_UNITE_IMU_METHOD:-2}"
+
+# -----------------------------------------------------------------------------
 # Topic layout — matches RealSense: camera_name:=camera camera_namespace:=camera
 # If your IMU is on e.g. /camera/imu, run:
 #   export GNNS_IMU_TOPIC=/camera/imu
 # -----------------------------------------------------------------------------
+if [[ "${GNNS_RS_IMU_STREAMS}" != "1" ]]; then
+  GNNS_USE_IMU="0"
+  GNNS_IMU_FILTER="0"
+  echo "[gnns_vio_stack] GNNS_RS_IMU_STREAMS=${GNNS_RS_IMU_STREAMS} — RealSense IMU disabled; GNNS_USE_IMU=0 GNNS_IMU_FILTER=0 (visual VO only)." >&2
+fi
+
 CAM_NS="/camera/camera"
 RGB_TOPIC="${GNNS_RGB_TOPIC:-${CAM_NS}/color/image_raw}"
 DEPTH_TOPIC="${GNNS_DEPTH_TOPIC:-${CAM_NS}/aligned_depth_to_color/image_raw}"
 INFO_TOPIC="${GNNS_INFO_TOPIC:-${CAM_NS}/color/camera_info}"
 IMU_TOPIC="${GNNS_IMU_TOPIC:-${CAM_NS}/imu}"
-# rtabmap_slam only: RealSense Imu has no orientation → see header (4). VO still uses IMU_TOPIC above.
+# IMU source consumed by rgbd_odometry / rtabmap_slam:
+#   GNNS_IMU_FILTER=1 → Madgwick output ${GNNS_IMU_FILTERED_TOPIC} (has orientation quaternion)
+#   GNNS_IMU_FILTER=0 → raw ${IMU_TOPIC} (orientation=(0,0,0,0); rtabmap_slam will spam)
+if [[ "${GNNS_IMU_FILTER}" == "1" ]]; then
+  IMU_SOURCE_FOR_VO="${GNNS_IMU_FILTERED_TOPIC}"
+else
+  IMU_SOURCE_FOR_VO="${IMU_TOPIC}"
+fi
+# rtabmap_slam IMU topic resolution
+#   explicit GNNS_RTABMAP_IMU_TOPIC wins,
+#   else if GNNS_USE_IMU=1 use filtered topic,
+#   else legacy GNNS_RTABMAP_IMU=1 raw topic,
+#   else dummy (disabled).
 if [[ -n "${GNNS_RTABMAP_IMU_TOPIC:-}" ]]; then
   RTABMAP_SLAM_IMU_TOPIC="${GNNS_RTABMAP_IMU_TOPIC}"
+elif [[ "${GNNS_USE_IMU}" == "1" && "${GNNS_IMU_FILTER}" == "1" ]]; then
+  RTABMAP_SLAM_IMU_TOPIC="${GNNS_IMU_FILTERED_TOPIC}"
 elif [[ "${GNNS_RTABMAP_IMU:-0}" == "1" ]]; then
   RTABMAP_SLAM_IMU_TOPIC="${IMU_TOPIC}"
 else
@@ -180,7 +254,12 @@ GNNS_RGBD_TOPIC="${GNNS_RGBD_TOPIC:-/gnns_rgbd_image}"
 
 # Default: do NOT wait for IMU (fixes endless "Waiting to initialize IMU orientation")
 # Set GNNS_WAIT_IMU=1 only after `ros2 topic hz /camera/camera/imu` is stable.
+# When GNNS_USE_IMU=1 and GNNS_IMU_FILTER=1 we KNOW Madgwick will publish a valid
+# orientation-bearing IMU, so wait_imu_to_init becomes safe and high-accuracy.
 WAIT_IMU="${GNNS_WAIT_IMU:-0}"
+if [[ "${GNNS_USE_IMU}" == "1" && "${GNNS_IMU_FILTER}" == "1" ]]; then
+  WAIT_IMU="1"
+fi
 if [[ "$WAIT_IMU" == "1" ]]; then
   WAIT_IMU_INIT="true"
 else
@@ -233,18 +312,20 @@ ODOM_MAX_RATE="${GNNS_ODOM_MAX_RATE:-${RS_FPS}}"
 # BA disabled (too expensive per frame); ResetCountdown auto-recovers after 2 bad frames.
 # GuessMotion disabled — unreliable velocity prior without verified IMU.
 RTABMAP_ARGS_DEFAULT="--delete_db_on_start
---Vis/MaxFeatures 300
---Vis/MinInliers 8
+--Vis/MaxFeatures 600
+--Vis/MinInliers 12
 --Vis/EstimationType 1
 --Vis/MotionThreshold 1.0
---Kp/MaxFeatures 300
+--Kp/MaxFeatures 600
 --Kp/DetectorStrategy 6
 --Kp/MaxDepth 8.0
 --Kp/MinDepth 0.3
---OdoF2M/MaxSize 1500
+--OdoF2M/MaxSize 2000
 --OdoF2M/BundleAdjustment 0
 --Odom/Strategy 0
---Odom/GuessMotion false
+--Odom/GuessMotion true
+--Odom/KalmanProcessNoise 0.001
+--Odom/KalmanMeasurementNoise 0.01
 --Odom/FilteringStrategy 1
 --Odom/Holonomic false
 --Odom/ResetCountdown 2
@@ -285,7 +366,7 @@ RTABMAP_ARGS_RECOVERY="--delete_db_on_start
 # BA disabled for speed; slightly more patient reset (3 bad frames before reference reset).
 RTABMAP_ARGS_ACCURATE="--delete_db_on_start
 --Vis/MaxFeatures 600
---Vis/MinInliers 10
+--Vis/MinInliers 12
 --Vis/EstimationType 1
 --Vis/MotionThreshold 0.7
 --Kp/MaxFeatures 600
@@ -295,7 +376,9 @@ RTABMAP_ARGS_ACCURATE="--delete_db_on_start
 --OdoF2M/MaxSize 2000
 --OdoF2M/BundleAdjustment 0
 --Odom/Strategy 0
---Odom/GuessMotion false
+--Odom/GuessMotion true
+--Odom/KalmanProcessNoise 0.001
+--Odom/KalmanMeasurementNoise 0.01
 --Odom/FilteringStrategy 2
 --Odom/Holonomic false
 --Odom/ResetCountdown 3
@@ -350,6 +433,11 @@ build_rtab_rargs() {
   if [[ "${RTABMAP_KEEP_DB:-0}" == "1" ]]; then
     RTAB_RARGS="${RTAB_RARGS/--delete_db_on_start/}"
   fi
+  # IMU-aware auto-revert: presets now default to GuessMotion=true (IMU prior).
+  # If IMU is off, restore GuessMotion=false so VO doesn't trust a non-existent prior.
+  if [[ "${GNNS_USE_IMU}" != "1" ]]; then
+    RTAB_RARGS="${RTAB_RARGS} --Odom/GuessMotion false"
+  fi
   if [[ -n "${RTABMAP_EXTRA_ARGS:-}" ]]; then
     RTAB_RARGS="${RTAB_RARGS} ${RTABMAP_EXTRA_ARGS}"
   fi
@@ -359,21 +447,38 @@ build_rtab_rargs() {
   RTAB_SLAM_RARGS="$(strip_rtabargs_for_slam_node "${RTAB_RARGS}")"
 }
 
-# Common RealSense launch arguments (IMU required — fixes "bad optional access")
+# Common RealSense launch arguments
+# initial_reset often clears transient "HID Motion Sensor Failure! bad optional access".
+# GNNS_RS_IMU_STREAMS=0 skips motion module entirely (visual odometry only).
+if [[ "${GNNS_REALSENSE_INITIAL_RESET}" == "1" ]]; then RS_INITIAL_RESET="true"; else RS_INITIAL_RESET="false"; fi
+if [[ "${GNNS_REALSENSE_ENABLE_SYNC}" == "1" ]]; then RS_ENABLE_SYNC="true"; else RS_ENABLE_SYNC="false"; fi
 RS_LAUNCH_ARGS=(
   align_depth.enable:=true
   publish_tf:=true
   enable_color:=true
   enable_depth:=true
-  enable_gyro:=true
-  enable_accel:=true
-  unite_imu_method:=2
+  "initial_reset:=${RS_INITIAL_RESET}"
+  "enable_sync:=${RS_ENABLE_SYNC}"
   depth_module.infra_profile:=0x0x0
   "rgb_camera.color_profile:=${RS_PROFILE}"
   "depth_module.depth_profile:=${RS_PROFILE}"
   camera_name:=camera
   camera_namespace:=camera
 )
+if [[ "${GNNS_RS_IMU_STREAMS:-1}" == "1" ]]; then
+  RS_LAUNCH_ARGS+=(
+    enable_gyro:=true
+    enable_accel:=true
+    "unite_imu_method:=${GNNS_RS_UNITE_IMU_METHOD}"
+    "gyro_fps:=${GNNS_GYRO_FPS}"
+    "accel_fps:=${GNNS_ACCEL_FPS}"
+  )
+else
+  RS_LAUNCH_ARGS+=(
+    enable_gyro:=false
+    enable_accel:=false
+  )
+fi
 
 # -----------------------------------------------------------------------------
 # Wait until a ROS topic has at least one message (timeout seconds)
@@ -466,6 +571,91 @@ kill_process_tree() {
 }
 
 # -----------------------------------------------------------------------------
+# require_ros_pkg <pkg> <install-hint> — fail fast with actionable hint
+# -----------------------------------------------------------------------------
+require_ros_pkg() {
+  local pkg="$1"; local hint="$2"
+  if ! ros2 pkg prefix "$pkg" >/dev/null 2>&1; then
+    echo "[gnns_vio_stack] ERROR: ROS 2 package '${pkg}' not found." >&2
+    echo "  Install: ${hint}" >&2
+    exit 2
+  fi
+}
+
+# -----------------------------------------------------------------------------
+# wait_for_topic_hz <topic> <min_hz> <window_sec> — verify publish rate
+# Parses `ros2 topic hz --window N` (line: "average rate: <hz>"). Returns 0 if
+# observed average >= min_hz, else 1. Use after wait_for_topic so we don't
+# declare ready on a topic that's only sputtering.
+# -----------------------------------------------------------------------------
+wait_for_topic_hz() {
+  local topic="$1"; local min_hz="$2"; local window="${3:-6}"
+  if [[ "${GNNS_HEALTH_HZ_GATE}" != "1" ]]; then
+    return 0
+  fi
+  echo "[gnns_vio_stack] Checking rate of ${topic} (need >= ${min_hz} Hz over ${window}s)…"
+  local out
+  out="$(timeout "$((window + 4))" ros2 topic hz "$topic" --window "$window" 2>&1 | grep -m 1 'average rate' || true)"
+  if [[ -z "$out" ]]; then
+    echo "[gnns_vio_stack] WARN: no rate samples for ${topic} (gate skipped)" >&2
+    return 0
+  fi
+  local hz
+  hz="$(echo "$out" | sed -E 's/.*average rate:[[:space:]]*([0-9]+\.[0-9]+).*/\1/')"
+  if awk -v a="$hz" -v b="$min_hz" 'BEGIN{exit !(a+0 >= b+0)}'; then
+    echo "[gnns_vio_stack] OK: ${topic} averaging ${hz} Hz (>= ${min_hz})."
+    return 0
+  fi
+  echo "[gnns_vio_stack] WARN: ${topic} averaging ${hz} Hz (< ${min_hz})" >&2
+  return 1
+}
+
+# -----------------------------------------------------------------------------
+# imu_filter_madgwick — fuses raw gyro+accel from RealSense into orientation-bearing
+# /imu/data (or GNNS_IMU_FILTERED_TOPIC). This is what makes wait_imu_to_init and
+# Odom/GuessMotion safe + accurate. Without this, rtabmap_slam spams "orientation
+# not set" and rgbd_odometry has no gravity prior.
+# -----------------------------------------------------------------------------
+launch_madgwick_bg() {
+  require_ros_pkg imu_filter_madgwick "sudo apt install -y ros-${ROS_DISTRO}-imu-filter-madgwick"
+  local use_mag="false"
+  [[ "${GNNS_MADGWICK_USE_MAG}" == "1" ]] && use_mag="true"
+  echo "[gnns_vio_stack] Launching imu_filter_madgwick → ${GNNS_IMU_FILTERED_TOPIC}…" >&2
+  echo "  raw=${IMU_TOPIC}  use_mag=${use_mag}  gain=${GNNS_MADGWICK_GAIN}  world_frame=${GNNS_MADGWICK_WORLD_FRAME}" >&2
+  echo "  Log: ${MAD_LOG}" >&2
+  ros2 run imu_filter_madgwick imu_filter_madgwick_node --ros-args \
+    -p use_mag:=${use_mag} \
+    -p publish_tf:=false \
+    -p world_frame:=${GNNS_MADGWICK_WORLD_FRAME} \
+    -p gain:=${GNNS_MADGWICK_GAIN} \
+    -r imu/data_raw:=${IMU_TOPIC} \
+    -r imu/data:=${GNNS_IMU_FILTERED_TOPIC} \
+    >>"${MAD_LOG}" 2>&1 &
+  GNNS_MADGWICK_PID=$!
+}
+
+# -----------------------------------------------------------------------------
+# robot_localization ekf_node — fuse /odom (position) with /imu/data (orientation,
+# angular velocity, linear acceleration) into /odometry/filtered. This is the
+# competition-grade smoother (15-state EKF in 3D mode).
+# -----------------------------------------------------------------------------
+launch_ekf_bg() {
+  require_ros_pkg robot_localization "sudo apt install -y ros-${ROS_DISTRO}-robot-localization"
+  if [[ ! -f "${GNNS_EKF_CONFIG}" ]]; then
+    echo "[gnns_vio_stack] ERROR: GNNS_EKF_CONFIG not found: ${GNNS_EKF_CONFIG}" >&2
+    exit 2
+  fi
+  echo "[gnns_vio_stack] Launching robot_localization ekf_node → ${GNNS_EKF_ODOM_TOPIC}…" >&2
+  echo "  config=${GNNS_EKF_CONFIG}" >&2
+  echo "  Log:    ${EKF_LOG}" >&2
+  ros2 run robot_localization ekf_node --ros-args \
+    --params-file "${GNNS_EKF_CONFIG}" \
+    -r odometry/filtered:=${GNNS_EKF_ODOM_TOPIC} \
+    >>"${EKF_LOG}" 2>&1 &
+  GNNS_EKF_PID=$!
+}
+
+# -----------------------------------------------------------------------------
 # Optional: rgbd_sync (rtabmap_sync) — fuse color+depth into one rgbd_image topic
 # -----------------------------------------------------------------------------
 # When GNNS_USE_RGBD_SYNC=1, odom + rtabmap subscribe_rgbd use GNNS_RGBD_TOPIC.
@@ -499,9 +689,17 @@ launch_rgbd_odometry_bg() {
   odom_rargs="${odom_rargs//--delete_db_on_start/}"
   odom_rargs="$(echo "${odom_rargs}" | tr -s ' ' | sed 's/^ *//;s/ *$//')"
 
+  # IMU policy:
+  #   GNNS_USE_IMU=1  → wait for IMU + always_check_imu_tf=true; remap to filtered topic.
+  #   GNNS_USE_IMU=0  → fall back to legacy GNNS_WAIT_IMU behavior (raw IMU, no wait).
   local wait_imu_odom="false"
   local check_imu_tf="false"
-  if [[ "${WAIT_IMU}" == "1" ]]; then
+  local imu_for_vo="${IMU_TOPIC}"
+  if [[ "${GNNS_USE_IMU}" == "1" ]]; then
+    wait_imu_odom="true"
+    check_imu_tf="true"
+    imu_for_vo="${IMU_SOURCE_FOR_VO}"
+  elif [[ "${WAIT_IMU}" == "1" ]]; then
     wait_imu_odom="true"
     check_imu_tf="true"
   fi
@@ -509,6 +707,7 @@ launch_rgbd_odometry_bg() {
   echo "[gnns_vio_stack] Launching rgbd_odometry (rtabmap_odom)…" >&2
   echo "  Log: ${ODOM_LOG}" >&2
   echo "  → ${ODOM_TOPIC}  max_update_rate=${ODOM_MAX_RATE} Hz  (wait_imu_to_init=${wait_imu_odom})" >&2
+  echo "  IMU subscriber: ${imu_for_vo}  qos_imu=${GNNS_QOS_IMU}  topic_queue_imu=${GNNS_IMU_QUEUE_SIZE}" >&2
 
   if [[ "${GNNS_USE_RGBD_SYNC}" == "1" ]]; then
     # shellcheck disable=SC2086
@@ -526,9 +725,11 @@ launch_rgbd_odometry_bg() {
       -p topic_queue_size:=${QUEUE_SIZE} \
       -p qos:=${GNNS_QOS_ODOM} \
       -p qos_camera_info:=${GNNS_QOS_ODOM} \
+      -p qos_imu:=${GNNS_QOS_IMU} \
       -p max_update_rate:=${ODOM_MAX_RATE}.0 \
+      -p expected_update_rate:=${ODOM_MAX_RATE}.0 \
       -r rgbd_image:=${GNNS_RGBD_TOPIC} \
-      -r imu:=${IMU_TOPIC} \
+      -r imu:=${imu_for_vo} \
       -r odom:=${ODOM_TOPIC} \
       >>"${ODOM_LOG}" 2>&1 &
   else
@@ -546,11 +747,13 @@ launch_rgbd_odometry_bg() {
       -p topic_queue_size:=${QUEUE_SIZE} \
       -p qos:=${GNNS_QOS_ODOM} \
       -p qos_camera_info:=${GNNS_QOS_ODOM} \
+      -p qos_imu:=${GNNS_QOS_IMU} \
       -p max_update_rate:=${ODOM_MAX_RATE}.0 \
+      -p expected_update_rate:=${ODOM_MAX_RATE}.0 \
       -r rgb/image:=${RGB_TOPIC} \
       -r depth/image:=${DEPTH_TOPIC} \
       -r rgb/camera_info:=${INFO_TOPIC} \
-      -r imu:=${IMU_TOPIC} \
+      -r imu:=${imu_for_vo} \
       -r odom:=${ODOM_TOPIC} \
       >>"${ODOM_LOG}" 2>&1 &
   fi
@@ -666,6 +869,19 @@ launch_rtabmap_with_odom() {
   : >"${ODOM_LOG}"
   : >"${RT_LOG}"
 
+  # Optional Madgwick (assumes RealSense is already publishing raw IMU on ${IMU_TOPIC})
+  if [[ "${GNNS_IMU_FILTER}" == "1" ]]; then
+    : >"${MAD_LOG}"
+    if wait_for_topic "${IMU_TOPIC}" 15; then
+      launch_madgwick_bg
+      if ! wait_for_topic "${GNNS_IMU_FILTERED_TOPIC}" 20; then
+        echo "[gnns_vio_stack] WARN: Madgwick did not publish ${GNNS_IMU_FILTERED_TOPIC}" >&2
+      fi
+    else
+      echo "[gnns_vio_stack] WARN: raw IMU ${IMU_TOPIC} unavailable — skipping Madgwick" >&2
+    fi
+  fi
+
   if [[ "${GNNS_USE_RGBD_SYNC}" == "1" ]]; then
     launch_rgbd_sync_bg
     echo "[gnns_vio_stack] Waiting for fused RGB-D topic ${GNNS_RGBD_TOPIC}…"
@@ -687,9 +903,17 @@ launch_rtabmap_with_odom() {
   cleanup_odom() {
     echo "[gnns_vio_stack] Stopping rgbd_odometry (PID=${ODOM_PID})…"
     kill_process_tree "${ODOM_PID}"
+    if [[ -n "${GNNS_EKF_PID:-}" ]] && [[ "${GNNS_EKF_PID}" =~ ^[0-9]+$ ]]; then
+      echo "[gnns_vio_stack] Stopping EKF (PID=${GNNS_EKF_PID})…"
+      kill_process_tree "${GNNS_EKF_PID}"
+    fi
     if [[ -n "${GNNS_RGBD_SYNC_PID:-}" ]] && [[ "${GNNS_RGBD_SYNC_PID}" =~ ^[0-9]+$ ]]; then
       echo "[gnns_vio_stack] Stopping rgbd_sync (PID=${GNNS_RGBD_SYNC_PID})…"
       kill_process_tree "${GNNS_RGBD_SYNC_PID}"
+    fi
+    if [[ -n "${GNNS_MADGWICK_PID:-}" ]] && [[ "${GNNS_MADGWICK_PID}" =~ ^[0-9]+$ ]]; then
+      echo "[gnns_vio_stack] Stopping Madgwick (PID=${GNNS_MADGWICK_PID})…"
+      kill_process_tree "${GNNS_MADGWICK_PID}"
     fi
   }
   trap cleanup_odom EXIT INT TERM
@@ -705,6 +929,20 @@ launch_rtabmap_with_odom() {
   fi
   if ! wait_for_tf_odom_camera_link 90; then
     exit 1
+  fi
+  local odom_min_hz="$(awk -v f="$ODOM_MAX_RATE" 'BEGIN{printf "%.1f", f/2}')"
+  wait_for_topic_hz "${ODOM_TOPIC}" "${odom_min_hz}" 6 || \
+    echo "[gnns_vio_stack] WARN: ${ODOM_TOPIC} below ${odom_min_hz} Hz — VO may be unhealthy" >&2
+
+  if [[ "${GNNS_USE_EKF}" == "1" ]]; then
+    : >"${EKF_LOG}"
+    launch_ekf_bg
+    if ! wait_for_topic "${GNNS_EKF_ODOM_TOPIC}" 30; then
+      echo "[gnns_vio_stack] ERROR: EKF never published ${GNNS_EKF_ODOM_TOPIC}" >&2
+      echo "--- last 30 lines of ${EKF_LOG} ---" >&2
+      tail -n 30 "${EKF_LOG}" 2>/dev/null >&2 || true
+      exit 1
+    fi
   fi
 
   launch_rtabmap_slam
@@ -737,11 +975,17 @@ launch_stack() {
   ODOM_PID=""
   cleanup() {
     echo "[gnns_vio_stack] Shutting down…"
+    if [[ -n "${GNNS_EKF_PID:-}" ]] && [[ "${GNNS_EKF_PID}" =~ ^[0-9]+$ ]]; then
+      kill_process_tree "${GNNS_EKF_PID}"
+    fi
     if [[ -n "${ODOM_PID}" ]] && [[ "$ODOM_PID" =~ ^[0-9]+$ ]]; then
       kill_process_tree "${ODOM_PID}"
     fi
     if [[ -n "${GNNS_RGBD_SYNC_PID:-}" ]] && [[ "${GNNS_RGBD_SYNC_PID}" =~ ^[0-9]+$ ]]; then
       kill_process_tree "${GNNS_RGBD_SYNC_PID}"
+    fi
+    if [[ -n "${GNNS_MADGWICK_PID:-}" ]] && [[ "${GNNS_MADGWICK_PID}" =~ ^[0-9]+$ ]]; then
+      kill_process_tree "${GNNS_MADGWICK_PID}"
     fi
     kill_process_tree "${RS_PID}"
   }
@@ -752,12 +996,27 @@ launch_stack() {
   echo "[gnns_vio_stack] Waiting for camera streams (${cam_wait} s)…"
   sleep "${cam_wait}"
 
-  if [[ "$WAIT_IMU" == "1" ]]; then
-    wait_for_topic "$IMU_TOPIC" 30 || {
+  if [[ "${GNNS_IMU_FILTER}" == "1" || "${WAIT_IMU}" == "1" ]]; then
+    if ! wait_for_topic "$IMU_TOPIC" 30; then
       echo "[gnns_vio_stack] IMU not seen on ${IMU_TOPIC}" >&2
       echo "  Run: ros2 topic list | grep -i imu" >&2
-      echo "  Or retry with: GNNS_WAIT_IMU=0 $0 stack" >&2
-    }
+      echo "  Or retry with: GNNS_USE_IMU=0 GNNS_IMU_FILTER=0 GNNS_WAIT_IMU=0 $0 stack" >&2
+      exit 1
+    fi
+    wait_for_topic_hz "$IMU_TOPIC" 100 6 || true
+  fi
+
+  if [[ "${GNNS_IMU_FILTER}" == "1" ]]; then
+    : >"${MAD_LOG}"
+    launch_madgwick_bg
+    echo "[gnns_vio_stack] Madgwick PID=${GNNS_MADGWICK_PID}"
+    if ! wait_for_topic "${GNNS_IMU_FILTERED_TOPIC}" 30; then
+      echo "[gnns_vio_stack] ERROR: Madgwick never published ${GNNS_IMU_FILTERED_TOPIC}" >&2
+      echo "--- last 30 lines of ${MAD_LOG} ---" >&2
+      tail -n 30 "${MAD_LOG}" 2>/dev/null >&2 || true
+      exit 1
+    fi
+    wait_for_topic_hz "${GNNS_IMU_FILTERED_TOPIC}" 50 6 || true
   fi
 
   if [[ "${GNNS_USE_RGBD_SYNC}" == "1" ]]; then
@@ -788,6 +1047,22 @@ launch_stack() {
   if ! wait_for_tf_odom_camera_link 90; then
     exit 1
   fi
+  local odom_min_hz="$(awk -v f="$ODOM_MAX_RATE" 'BEGIN{printf "%.1f", f/2}')"
+  wait_for_topic_hz "${ODOM_TOPIC}" "${odom_min_hz}" 6 || \
+    echo "[gnns_vio_stack] WARN: ${ODOM_TOPIC} below ${odom_min_hz} Hz — VO may be unhealthy" >&2
+
+  if [[ "${GNNS_USE_EKF}" == "1" ]]; then
+    : >"${EKF_LOG}"
+    launch_ekf_bg
+    echo "[gnns_vio_stack] EKF PID=${GNNS_EKF_PID}"
+    if ! wait_for_topic "${GNNS_EKF_ODOM_TOPIC}" 30; then
+      echo "[gnns_vio_stack] ERROR: EKF never published ${GNNS_EKF_ODOM_TOPIC}" >&2
+      echo "--- last 30 lines of ${EKF_LOG} ---" >&2
+      tail -n 30 "${EKF_LOG}" 2>/dev/null >&2 || true
+      exit 1
+    fi
+    wait_for_topic_hz "${GNNS_EKF_ODOM_TOPIC}" 25 6 || true
+  fi
 
   launch_rtabmap_slam
   cleanup
@@ -809,19 +1084,82 @@ launch_mission() {
 }
 
 # -----------------------------------------------------------------------------
-# Print topics for debugging RealSense VIO
+# Standalone modes: launch Madgwick or EKF only (RealSense / rgbd_odometry must
+# already be running). Useful for incremental bring-up and debugging.
+# -----------------------------------------------------------------------------
+cmd_imu() {
+  echo "[gnns_vio_stack] IMU filter session — Madgwick → ${GNNS_IMU_FILTERED_TOPIC}"
+  echo "  Requires: RealSense publishing on ${IMU_TOPIC}"
+  : >"${MAD_LOG}"
+  if ! wait_for_topic "${IMU_TOPIC}" 15; then
+    echo "[gnns_vio_stack] ERROR: raw IMU ${IMU_TOPIC} not seen — start RealSense first." >&2
+    exit 1
+  fi
+  launch_madgwick_bg
+  echo "[gnns_vio_stack] Madgwick PID=${GNNS_MADGWICK_PID}"
+  trap 'kill_process_tree "${GNNS_MADGWICK_PID}"' EXIT INT TERM
+  if ! wait_for_topic "${GNNS_IMU_FILTERED_TOPIC}" 30; then
+    echo "[gnns_vio_stack] ERROR: Madgwick never published ${GNNS_IMU_FILTERED_TOPIC}" >&2
+    tail -n 30 "${MAD_LOG}" 2>/dev/null >&2 || true
+    exit 1
+  fi
+  wait_for_topic_hz "${GNNS_IMU_FILTERED_TOPIC}" 50 6 || true
+  echo "[gnns_vio_stack] IMU filter ready. Ctrl+C to stop."
+  wait "${GNNS_MADGWICK_PID}" 2>/dev/null || true
+}
+
+cmd_ekf() {
+  echo "[gnns_vio_stack] EKF session — ${GNNS_EKF_ODOM_TOPIC}"
+  echo "  Requires: ${ODOM_TOPIC} and ${GNNS_IMU_FILTERED_TOPIC} both publishing"
+  : >"${EKF_LOG}"
+  if ! wait_for_topic "${ODOM_TOPIC}" 30; then
+    echo "[gnns_vio_stack] ERROR: ${ODOM_TOPIC} not seen — run rtabmap/stack first." >&2
+    exit 1
+  fi
+  if ! wait_for_topic "${GNNS_IMU_FILTERED_TOPIC}" 30; then
+    echo "[gnns_vio_stack] ERROR: ${GNNS_IMU_FILTERED_TOPIC} not seen — run imu/stack first." >&2
+    exit 1
+  fi
+  launch_ekf_bg
+  echo "[gnns_vio_stack] EKF PID=${GNNS_EKF_PID}"
+  trap 'kill_process_tree "${GNNS_EKF_PID}"' EXIT INT TERM
+  if ! wait_for_topic "${GNNS_EKF_ODOM_TOPIC}" 30; then
+    echo "[gnns_vio_stack] ERROR: EKF never published ${GNNS_EKF_ODOM_TOPIC}" >&2
+    tail -n 30 "${EKF_LOG}" 2>/dev/null >&2 || true
+    exit 1
+  fi
+  wait_for_topic_hz "${GNNS_EKF_ODOM_TOPIC}" 25 6 || true
+  echo "[gnns_vio_stack] EKF ready. Ctrl+C to stop."
+  wait "${GNNS_EKF_PID}" 2>/dev/null || true
+}
+
+# -----------------------------------------------------------------------------
+# Print health summary: topic list, rates, TF, log tails
 # -----------------------------------------------------------------------------
 cmd_diagnose() {
-  echo "=== ros2 topic list (camera / imu / odom) ==="
-  ros2 topic list 2>/dev/null | grep -E -i 'camera|imu|odom|rtabmap' || true
+  echo "=== ros2 topic list (camera / imu / odom / rtabmap) ==="
+  ros2 topic list 2>/dev/null | grep -E -i 'camera|imu|odom|rtabmap|filtered' || true
   echo ""
-  echo "=== Try IMU rate (adjust path if empty) ==="
-  echo "  ros2 topic hz ${IMU_TOPIC}"
-  echo "  ros2 topic echo ${IMU_TOPIC} --once"
+  echo "=== Average rates over 5s (skipped if topic absent) ==="
+  for t in "${IMU_TOPIC}" "${GNNS_IMU_FILTERED_TOPIC}" "${ODOM_TOPIC}" "${GNNS_EKF_ODOM_TOPIC}"; do
+    if ros2 topic info "$t" >/dev/null 2>&1; then
+      printf "  %-32s " "$t"
+      timeout 7 ros2 topic hz "$t" --window 5 2>/dev/null | grep -m 1 'average rate' || echo "(no samples)"
+    fi
+  done
   echo ""
+  echo "=== TF odom -> camera_link ==="
+  timeout 3 ros2 run tf2_ros tf2_echo "${ODOM_FRAME_FOR_TF}" "${CAMERA_FRAME_FOR_TF}" 2>&1 | grep -m 1 'Translation' || echo "  (no transform — VO TF not connected)"
+  echo ""
+  for L in "${RS_LOG}" "${MAD_LOG}" "${ODOM_LOG}" "${EKF_LOG}" "${RT_LOG}"; do
+    [[ -f "$L" ]] || continue
+    echo "--- tail -n 10 ${L} ---"
+    tail -n 10 "$L" 2>/dev/null || true
+    echo ""
+  done
   echo "=== If IMU path is wrong, set e.g. ==="
-  echo "  export GNNS_IMU_TOPIC=/camera/imu"
-  echo "  # or: ros2 topic list | grep imu"
+  echo "  export GNNS_IMU_TOPIC=/camera/imu      # raw IMU"
+  echo "  export GNNS_IMU_FILTERED_TOPIC=/imu/data   # Madgwick output"
 }
 
 # -----------------------------------------------------------------------------
@@ -837,6 +1175,12 @@ case "$MODE" in
   rtabmap)
     launch_rtabmap_with_odom
     ;;
+  imu)
+    cmd_imu
+    ;;
+  ekf)
+    cmd_ekf
+    ;;
   stack)
     launch_stack
     ;;
@@ -847,14 +1191,14 @@ case "$MODE" in
     cmd_diagnose
     ;;
   help|--help|-h)
-    sed -n '1,55p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '1,90p' "$0" | sed 's/^# \{0,1\}//'
     echo ""
-    echo "Extra command:  diagnose  — list camera/imu/odom topics"
+    echo "Commands:  realsense | rtabmap | imu | ekf | stack | mission | diagnose | help"
     echo ""
-    echo "Logs (stack / rtabmap): ${RS_LOG} , ${ODOM_LOG} , ${RT_LOG}"
+    echo "Logs (stack / rtabmap): ${RS_LOG} , ${MAD_LOG} , ${ODOM_LOG} , ${EKF_LOG} , ${RT_LOG}"
     ;;
   *)
-    echo "Unknown mode: $MODE — use: realsense | rtabmap | stack | mission | diagnose | help" >&2
+    echo "Unknown mode: $MODE — use: realsense | rtabmap | imu | ekf | stack | mission | diagnose | help" >&2
     exit 1
     ;;
 esac
