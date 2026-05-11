@@ -44,10 +44,15 @@
 #   ./scripts/jetson_nano/gnns_vio_stack.sh rtabmap      # rgbd_odometry + RTAB (camera up)
 #   ./scripts/jetson_nano/gnns_vio_stack.sh ekf          # robot_localization EKF only (/odom + /imu/data)
 #   ./scripts/jetson_nano/gnns_vio_stack.sh stack        # RealSense → Madgwick → rgbd_odometry → (EKF) → RTAB
+#   ./scripts/jetson_nano/gnns_vio_stack.sh competition  # shorthand: enables IMU+Madgwick+EKF+accurate+30 Hz → stack
 #   ./scripts/jetson_nano/gnns_vio_stack.sh mission --demo
 #   ./scripts/jetson_nano/gnns_vio_stack.sh diagnose     # Topic list + rates + TF + log tails
 #
-# Competition default (IMU-fused VO, accurate preset, EKF-smoothed odometry, SLAM map):
+# Competition profile (shortcut — same defaults as env block below, then runs `stack`):
+#   ./scripts/jetson_nano/gnns_vio_stack.sh competition
+#   Requires: sudo apt install ros-${ROS_DISTRO}-robot-localization  (EKF enabled)
+#
+# Competition default (explicit env — equivalent when values match defaults above):
 #   GNNS_USE_IMU=1 GNNS_USE_EKF=1 GNNS_RS_FPS=30 GNNS_RTABMAP_PRESET=accurate \
 #     ./scripts/jetson_nano/gnns_vio_stack.sh stack
 #
@@ -118,6 +123,19 @@ set -eo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 JETSON_DIR="$SCRIPT_DIR"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+# argv alias: `competition` → apply IMU+Madgwick+EKF+accurate+30fps+health gate, then `stack`
+if [[ "${1:-}" == "competition" ]]; then
+  export GNNS_USE_IMU="${GNNS_USE_IMU:-1}"
+  export GNNS_IMU_FILTER="${GNNS_IMU_FILTER:-1}"
+  export GNNS_USE_EKF="${GNNS_USE_EKF:-1}"
+  export GNNS_RS_FPS="${GNNS_RS_FPS:-30}"
+  export GNNS_RTABMAP_PRESET="${GNNS_RTABMAP_PRESET:-accurate}"
+  export GNNS_HEALTH_HZ_GATE="${GNNS_HEALTH_HZ_GATE:-1}"
+  shift
+  set -- stack "$@"
+  echo "[gnns_vio_stack] mode=competition (use IMU+Madgwick+EKF, ${GNNS_RS_FPS:-30} fps, preset=${GNNS_RTABMAP_PRESET:-accurate})" >&2
+fi
 
 if [[ -z "${ROS_DISTRO:-}" ]]; then
   case "$(lsb_release -cs 2>/dev/null)" in
@@ -1193,12 +1211,12 @@ case "$MODE" in
   help|--help|-h)
     sed -n '1,90p' "$0" | sed 's/^# \{0,1\}//'
     echo ""
-    echo "Commands:  realsense | rtabmap | imu | ekf | stack | mission | diagnose | help"
+    echo "Commands:  realsense | rtabmap | imu | ekf | stack | competition | mission | diagnose | help"
     echo ""
     echo "Logs (stack / rtabmap): ${RS_LOG} , ${MAD_LOG} , ${ODOM_LOG} , ${EKF_LOG} , ${RT_LOG}"
     ;;
   *)
-    echo "Unknown mode: $MODE — use: realsense | rtabmap | imu | ekf | stack | mission | diagnose | help" >&2
+    echo "Unknown mode: $MODE — use: realsense | rtabmap | imu | ekf | stack | competition | mission | diagnose | help" >&2
     exit 1
     ;;
 esac

@@ -14,7 +14,7 @@ Simple two-process flow (see `docs/JETSON_LAPTOP_SETUP.md`):
 ./scripts/jetson_nano/d455_launch.sh
 ./scripts/jetson_nano/rtabmap_vio.sh
 
-# Laptop
+# Laptop — needs a graphical desktop (or `ssh -Y`); plain headless SSH has no DISPLAY for RViz2.
 chmod +x scripts/jetson_nano/laptop_rviz2.sh scripts/jetson_nano/verify_bridge.sh
 ./scripts/jetson_nano/laptop_rviz2.sh 42
 ```
@@ -36,11 +36,14 @@ chmod +x scripts/jetson_nano/gnns_vio_stack.sh
 # Terminal A — full stack (camera in background, RTAB-Map + viz in foreground)
 ./scripts/jetson_nano/gnns_vio_stack.sh stack
 
+# Competition profile (IMU + Madgwick + EKF + accurate preset @ 30 Hz) — installs: robot-localization
+./scripts/jetson_nano/gnns_vio_stack.sh competition
+
 # Terminal B — FC + mission (after /odom is publishing)
 ./scripts/jetson_nano/gnns_vio_stack.sh mission --demo
 ```
 
-See the script header for `realsense` / `rtabmap` / `mission` / `diagnose` modes.
+See the script header for `realsense` / `rtabmap` / `stack` / `competition` / `mission` / `diagnose` modes.
 
 ### IMU-fused competition profile (default since v2)
 
@@ -54,7 +57,7 @@ producing `/imu/data` (orientation-bearing) consumed by `rgbd_odometry`
 # Install one-time:
 sudo apt install -y ros-humble-imu-filter-madgwick ros-humble-robot-localization
 
-# Run with full IMU + EKF + accurate preset:
+# Equivalent one-liner (same defaults as `./gnns_vio_stack.sh competition`):
 GNNS_USE_IMU=1 GNNS_USE_EKF=1 GNNS_RS_FPS=30 GNNS_RTABMAP_PRESET=accurate \
   ./scripts/jetson_nano/gnns_vio_stack.sh stack
 

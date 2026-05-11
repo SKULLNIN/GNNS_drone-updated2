@@ -10,6 +10,11 @@
 #   ./scripts/jetson_nano/laptop_rviz2.sh
 #   ./scripts/jetson_nano/laptop_rviz2.sh 42
 #   RQT_IMAGE=1 ./scripts/jetson_nano/laptop_rviz2.sh   # also open rqt_image_view
+#
+# If RViz dies with "qt.qpa.xcb: could not connect to display": DISPLAY points at an X
+# server you cannot access (common: SSH without -Y, Cursor remote terminal, or wrong :0).
+# Fix: run from the laptop's desktop terminal, or ssh -Y user@host, or match the session's DISPLAY.
+#   GNNS_SKIP_RVIZ_DISPLAY_CHECK=1  # skip xdpyinfo preflight (not recommended)
 # ================================================================
 # Do not use set -u — ROS setup.bash references unset variables.
 set -eo pipefail
@@ -41,6 +46,38 @@ if ! command -v ros2 >/dev/null 2>&1; then
     echo "[Error] ros2 not in PATH after sourcing $SETUP" >&2
     exit 2
 fi
+
+_gnns_rviz_display_ready() {
+    if [[ "${GNNS_SKIP_RVIZ_DISPLAY_CHECK:-0}" == "1" ]]; then
+        return 0
+    fi
+    if [[ -n "${WAYLAND_DISPLAY:-}" ]] && [[ -z "${DISPLAY:-}" ]]; then
+        return 0
+    fi
+    if [[ -z "${DISPLAY:-}" ]]; then
+        echo "[Error] No DISPLAY (and no WAYLAND for Qt). RViz cannot open a window here." >&2
+        echo "  • Run from the machine's graphical terminal, or: ssh -Y user@host" >&2
+        echo "  • Cursor/SSH: do not rely on DISPLAY=:0 unless that X server is really yours." >&2
+        return 1
+    fi
+    if command -v xdpyinfo >/dev/null 2>&1; then
+        if xdpyinfo >/dev/null 2>&1; then
+            return 0
+        fi
+    elif command -v xset >/dev/null 2>&1; then
+        if timeout 3 xset q >/dev/null 2>&1; then
+            return 0
+        fi
+    else
+        echo "[Warn] No xdpyinfo/xset — cannot verify DISPLAY=$DISPLAY (install x11-utils or x11-xserver-utils)." >&2
+        return 0
+    fi
+    echo "[Error] DISPLAY=$DISPLAY is unreachable (same as: qt.qpa.xcb: could not connect to display)." >&2
+    echo "  • Plain SSH → use: ssh -Y user@laptop   then rerun this script" >&2
+    echo "  • On the laptop desktop: echo \$DISPLAY (often :0 or :1) and run from that session" >&2
+    echo "  • Wrong machine: RViz must run where the monitor is (same ROS_DOMAIN_ID as Jetson)." >&2
+    return 1
+}
 
 echo ""
 echo "  gNNS — Laptop RViz2  |  ROS_DOMAIN_ID=$ROS_DOMAIN_ID  |  RMW=$RMW_IMPLEMENTATION"
@@ -102,6 +139,10 @@ echo "        display 'Camera (image_rect_color)' or set Camera → Topic to mat
 echo "  If TF errors: Fixed Frame → map or camera_link."
 echo "  Image preview: select the Camera display in the left tree — thumbnail shows under properties."
 echo ""
+
+if ! _gnns_rviz_display_ready; then
+    exit 3
+fi
 
 RVIZ_CFG="$(cd "$SCRIPT_DIR/../.." && pwd)/config/drone_monitor.rviz"
 if [[ -f "$RVIZ_CFG" ]]; then
